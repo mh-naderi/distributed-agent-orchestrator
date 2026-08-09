@@ -1,0 +1,39 @@
+# Deployment: keeps N replicas of the research agent running, restarts
+# on crash. Service: gives it a stable name (research-agent-service)
+# that the orchestrator can always reach, regardless of pod restarts.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: research-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: research-agent }
+  template:
+    metadata:
+      labels: { app: research-agent }
+    spec:
+      containers:
+        - name: research-agent
+          image: agent-orchestrator/research-agent:latest
+          imagePullPolicy: IfNotPresent  # so kind/minikube uses the locally-built image
+          ports:
+            - containerPort: 8000  # MCP protocol
+            - containerPort: 9100  # Prometheus metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: research-agent-service
+  labels:
+    app: research-agent  # lets Prometheus's kubernetes_sd_configs find this
+spec:
+  selector: { app: research-agent }
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9100
+      targetPort: 9100

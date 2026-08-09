@@ -1,0 +1,14 @@
+[
+  {
+    "id": "mcp-adoption-summary",
+    "task": "Research the current state of MCP adoption and summarize it in two paragraphs.",
+    "expected_tools": ["search_web", "summarize"],
+    "must_contain": ["MCP", "protocol"]
+  },
+  {
+    "id": "code-review-basic",
+    "task": "Analyze this Python function for issues: def add(a, b): return a+b",
+    "expected_tools": ["analyze_code"],
+    "must_contain": []
+  }
+]

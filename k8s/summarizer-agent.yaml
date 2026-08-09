@@ -1,0 +1,39 @@
+# Deployment: keeps N replicas of the research agent running, restarts
+# on crash. Service: gives it a stable name (summarizer-agent-service)
+# that the orchestrator can always reach, regardless of pod restarts.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: summarizer-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: summarizer-agent }
+  template:
+    metadata:
+      labels: { app: summarizer-agent }
+    spec:
+      containers:
+        - name: summarizer-agent
+          image: agent-orchestrator/summarizer-agent:latest
+          imagePullPolicy: IfNotPresent  # so kind/minikube uses the locally-built image
+          ports:
+            - containerPort: 8000  # MCP protocol
+            - containerPort: 9101  # Prometheus metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: summarizer-agent-service
+  labels:
+    app: summarizer-agent  # lets Prometheus's kubernetes_sd_configs find this
+spec:
+  selector: { app: summarizer-agent }
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9101
+      targetPort: 9101
