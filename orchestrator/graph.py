@@ -7,61 +7,119 @@ This file wires together:
   - an "act" node: executes whatever tool the LLM asked for, via MCP
   - a conditional edge that routes between them based on the LLM's decision
 
-TODO(week 1, day 5-6): fill in call_llm() and call_mcp_tool() with real
-MCP client connections to the three agent servers. This skeleton defines
-the shape of the graph so it can be tested with stub responses first.
+The shape of the loop is the whole idea. The LLM never executes anything - it
+returns structured intent ("call search_web with this query"), the act node
+runs it against the right agent, the result is appended to the conversation,
+and the LLM reasons again now that it knows more. Repeat until it stops asking
+for tools. Everything else in this project is infrastructure around that.
+
+The nodes are async because both halves are I/O: an HTTP call to Ollama and an
+MCP call over the network. LangGraph runs async nodes natively - the graph is
+driven with ainvoke() instead of invoke().
 """
 
-from langgraph.graph import StateGraph, END
+import logging
+
+from langgraph.graph import END, StateGraph
+
+from orchestrator.llm import LLMProvider
+from orchestrator.mcp_client import MCPToolRegistry
 from orchestrator.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10  # guardrail against infinite loops - see project notes
 
+SYSTEM_PROMPT = """You are an orchestrator with access to specialist tools.
 
-def call_llm(state: AgentState) -> AgentState:
+Use the tools when they would genuinely help answer the user's request, and
+call them one step at a time - look at each result before deciding what to do
+next. When you have enough information, stop calling tools and write the final
+answer directly."""
+
+
+def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
     """
-    The 'reason' node. Sends current state (task + history so far) to the
-    LLM along with the list of available tools (discovered from the MCP
-    servers at startup), and gets back either a tool call request or a
-    final answer.
+    Build and compile the graph.
 
-    TODO: replace with a real LLM call (Ollama for most steps, Claude API
-    fallback for harder reasoning - see architecture notes on cost).
+    The registry and provider are passed in rather than constructed here so
+    the graph has no opinion about which LLM is behind it or which agents are
+    reachable. That's what lets the Claude fallback and any future agent slot
+    in without touching this file - and it makes the nodes testable with fakes.
     """
-    state["iterations"] += 1
-    # STUB: real implementation calls the LLM with state["messages"] +
-    # tool schemas, and appends its response (either a tool_call or a
-    # final answer) to state["messages"].
-    return state
 
+    async def call_llm(state: AgentState) -> dict:
+        """
+        The 'reason' node. Sends the task and history so far to the LLM along
+        with the tools discovered from the MCP servers, and gets back either
+        tool call requests or a final answer.
 
-def call_mcp_tool(state: AgentState) -> AgentState:
-    """
-    The 'act' node. Reads the tool call the LLM just requested, connects
-    to the corresponding MCP server, executes it, and appends the result
-    back into state so the next 'reason' step can see it.
+        Returns a *partial* state. LangGraph merges it using the reducers
+        declared in state.py: the message list is appended to, iterations is
+        replaced.
+        """
+        response = await provider.chat(state["messages"], registry.tools)
 
-    TODO: replace with real MCP client calls to research_agent,
-    summarizer_agent, and code_analysis_agent.
-    """
-    # STUB: real implementation inspects the last message for a tool_call,
-    # dispatches to the right MCP server, and appends the tool result.
-    return state
+        message: dict = {"role": "assistant", "content": response.content}
+        if response.tool_calls:
+            message["tool_calls"] = [
+                {"id": call.id, "name": call.name, "arguments": call.arguments}
+                for call in response.tool_calls
+            ]
+            logger.info(
+                "iteration %d: model requested %s",
+                state["iterations"] + 1,
+                [call.name for call in response.tool_calls],
+            )
+        else:
+            logger.info("iteration %d: model produced a final answer", state["iterations"] + 1)
 
+        return {"messages": [message], "iterations": state["iterations"] + 1}
 
-def should_continue(state: AgentState) -> str:
-    """
-    Conditional routing function. Reads the LLM's last decision and the
-    iteration guardrail to decide whether to act again or end.
-    """
-    if state["iterations"] >= MAX_ITERATIONS:
+    async def call_mcp_tool(state: AgentState) -> dict:
+        """
+        The 'act' node. Reads the tool calls the LLM just requested, executes
+        each against whichever agent owns it, and appends the results so the
+        next 'reason' step can see them.
+
+        Note there's no routing logic here: the registry already learned which
+        agent owns which tool during discovery, so dispatch is a lookup. A
+        fourth agent would need no change to this function.
+        """
+        last_message = state["messages"][-1]
+        results = []
+
+        for call in last_message.get("tool_calls", []):
+            output = await registry.call(call["name"], call["arguments"])
+            results.append(
+                {
+                    "role": "tool",
+                    "name": call["name"],
+                    "tool_call_id": call["id"],
+                    "content": output,
+                }
+            )
+
+        return {"messages": results}
+
+    def should_continue(state: AgentState) -> str:
+        """
+        Conditional routing. Reads the LLM's last decision and the iteration
+        guardrail to decide whether to act again or end.
+
+        The guardrail is checked first and deliberately: a model that keeps
+        requesting tools forever is a real failure mode, and without this the
+        loop would happily run until something else broke.
+        """
+        if state["iterations"] >= MAX_ITERATIONS:
+            logger.warning("hit MAX_ITERATIONS (%d), stopping", MAX_ITERATIONS)
+            return "end"
+
+        if state["messages"][-1].get("tool_calls"):
+            return "continue"
+
         return "end"
-    # TODO: check the LLM's last message - if it requested a tool call,
-    # return "continue"; if it produced a final answer, return "end".
-    return "end"
 
-
-def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("reason", call_llm)
     graph.add_node("act", call_mcp_tool)
