@@ -15,6 +15,7 @@ TODO(stretch goal, week 2+): convert this agent specifically to the
 async worker pattern and document the before/after in the README.
 """
 
+import os
 import time
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
@@ -22,8 +23,9 @@ from prometheus_client import Counter, Histogram, start_http_server
 TOOL_CALLS = Counter("tool_calls_total", "Total tool calls", ["tool_name", "status"])
 TOOL_LATENCY = Histogram("tool_call_duration_seconds", "Tool call latency", ["tool_name"])
 METRICS_PORT = 9102
+MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 
-mcp = FastMCP("code-analysis-agent")
+mcp = FastMCP("code-analysis-agent", host="0.0.0.0", port=MCP_PORT)
 
 
 class CodeAnalysisService:
@@ -53,4 +55,4 @@ def analyze_code(code: str) -> str:
 
 if __name__ == "__main__":
     start_http_server(METRICS_PORT)
-    mcp.run(transport="sse")
+    mcp.run(transport="streamable-http")

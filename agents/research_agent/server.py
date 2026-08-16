@@ -16,6 +16,7 @@ Pattern used throughout this project:
     is the minimum observability you need for a distributed system.
 """
 
+import os
 import time
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
@@ -42,7 +43,16 @@ TOOL_LATENCY = Histogram(
 # its own metrics port so Prometheus can tell them apart.
 METRICS_PORT = 9100
 
-mcp = FastMCP("research-agent")
+# MCP protocol port. Defaults to 8000 (what the k8s Service targets), but is
+# overridable so all three agents can run side by side on one machine during
+# local development - in the cluster each agent gets its own pod and can keep
+# the same port, but on a laptop they'd collide.
+MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
+
+# Bind 0.0.0.0, not FastMCP's 127.0.0.1 default: a process inside a container
+# that listens only on loopback is unreachable from outside the pod, so
+# kubectl port-forward and Service traffic would both fail.
+mcp = FastMCP("research-agent", host="0.0.0.0", port=MCP_PORT)
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +93,14 @@ def search_web(query: str) -> str:
 if __name__ == "__main__":
     # Start the metrics endpoint (Prometheus will scrape http://<pod>:9100/metrics)
     start_http_server(METRICS_PORT)
-    # Start the MCP server itself. Using SSE transport (HTTP-based) rather
-    # than stdio, because this needs to be reachable over the Kubernetes
-    # cluster network, not spawned as a local subprocess.
-    mcp.run(transport="sse")
+    # Start the MCP server itself. Using an HTTP-based transport rather than
+    # stdio, because this needs to be reachable over the Kubernetes cluster
+    # network, not spawned as a local subprocess.
+    #
+    # Specifically streamable-http, not sse: MCP's original HTTP transport
+    # (HTTP+SSE) used two endpoints - one to POST requests, a separate
+    # Server-Sent Events stream for responses. Streamable HTTP replaced it in
+    # spec revision 2025-03-26 with a single /mcp endpoint that upgrades to a
+    # stream only when the server needs to push. SSE reached end-of-life on
+    # 2026-04-01; the SDK still ships it for backwards compatibility only.
+    mcp.run(transport="streamable-http")

@@ -9,6 +9,7 @@ locally, or the Claude API for harder cases - see project notes on the
 sync-vs-worker-queue decision: this agent is fast, so it stays synchronous).
 """
 
+import os
 import time
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
@@ -16,8 +17,9 @@ from prometheus_client import Counter, Histogram, start_http_server
 TOOL_CALLS = Counter("tool_calls_total", "Total tool calls", ["tool_name", "status"])
 TOOL_LATENCY = Histogram("tool_call_duration_seconds", "Tool call latency", ["tool_name"])
 METRICS_PORT = 9101  # each agent gets its own port
+MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 
-mcp = FastMCP("summarizer-agent")
+mcp = FastMCP("summarizer-agent", host="0.0.0.0", port=MCP_PORT)
 
 
 class SummarizerService:
@@ -46,4 +48,4 @@ def summarize(text: str) -> str:
 
 if __name__ == "__main__":
     start_http_server(METRICS_PORT)
-    mcp.run(transport="sse")
+    mcp.run(transport="streamable-http")

@@ -1,5 +1,5 @@
 langgraph>=0.2.0
-mcp[cli]>=1.0.0
+mcp[cli]>=1.27,<2
 anthropic>=0.40.0
-ollama>=0.4.0
+ollama>=0.5.0  # >=0.5 for tool_name on tool-role messages
 prometheus-client>=0.20.0
