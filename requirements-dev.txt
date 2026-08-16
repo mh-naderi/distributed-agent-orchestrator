@@ -1,0 +1,6 @@
+# Test-only dependencies. Not installed into the agent images - those stay
+# minimal, see each agent's own requirements.txt.
+-r orchestrator/requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.24
