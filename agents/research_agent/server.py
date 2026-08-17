@@ -18,6 +18,7 @@ Pattern used throughout this project:
 
 import os
 import time
+from ddgs import DDGS
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -27,6 +28,12 @@ from prometheus_client import Counter, Histogram, start_http_server
 # Counter: a number that only goes up (total calls, total errors)
 # Histogram: tracks a distribution of values (so you can compute p50/p95/p99
 #            latency later in Grafana, not just an average)
+#
+# Known gap worth understanding before building dashboards on these: FastMCP
+# validates tool arguments against the schema and rejects bad input BEFORE
+# calling the decorated function, so a schema-invalid call never reaches the
+# code below and never increments status="error". Only failures raised inside
+# the tool body are counted here.
 TOOL_CALLS = Counter(
     "tool_calls_total",
     "Total number of tool calls",
@@ -57,15 +64,75 @@ mcp = FastMCP("research-agent", host="0.0.0.0", port=MCP_PORT)
 
 # ---------------------------------------------------------------------------
 # Business logic - kept separate from the MCP tool wrapper on purpose.
-# TODO(week 1, day 3-4): replace this stub with a real web search call
-# (e.g. a search API). Keeping it as a stub for now so the orchestrator
-# and the graph can be built and tested end-to-end before wiring up a
-# real external dependency.
 # ---------------------------------------------------------------------------
+# Why this stopped being a stub: while it returned a canned string, the tool
+# call still *looked* successful, so the orchestrating model received a
+# well-formed result containing no information and confidently invented an
+# answer around it (two runs produced two different fictional expansions of
+# "MCP", one with a fabricated statistic). An empty result shaped like a good
+# one is worse than an error, because nothing downstream can detect it.
+#
+# DuckDuckGo via ddgs needs no API key, which keeps the project inside its
+# no-cloud-budget constraint. The tradeoff is that ddgs scrapes HTML rather than
+# calling a supported API: it rate-limits, and under rapid use it starts
+# returning throttled responses. That's handled rather than hidden - failures
+# propagate, which is what finally makes tool_calls_total{status="error"}
+# reachable. Swapping in a keyed search API later means changing this class only.
+MAX_RESULTS = int(os.environ.get("SEARCH_MAX_RESULTS", "5"))
+MIN_SECONDS_BETWEEN_SEARCHES = float(os.environ.get("SEARCH_MIN_INTERVAL", "1.0"))
+
+# Sponsored results come back looking exactly like organic ones, but their URLs
+# are ad-network redirects. Left in, they get indexed and cited as evidence: an
+# early run had the model reporting a security vendor's ebook marketing as a
+# finding about MCP adoption. A model cannot tell an advertisement from a source,
+# so the filtering has to happen here.
+AD_URL_MARKERS = (
+    "/aclick",
+    "duckduckgo.com/y.js",
+    "googleadservices.com",
+    "doubleclick.net",
+    "/aclk?",
+)
+
+
+def _is_advertisement(url: str) -> bool:
+    return any(marker in url.lower() for marker in AD_URL_MARKERS)
+
+
 class SearchService:
+    def __init__(self):
+        self._last_search_at = 0.0
+
+    def _throttle(self) -> None:
+        """
+        Space out requests. DuckDuckGo throttles automated traffic, and an agent
+        loop can fire several searches in a few seconds - which is exactly the
+        pattern that trips it.
+        """
+        elapsed = time.time() - self._last_search_at
+        if elapsed < MIN_SECONDS_BETWEEN_SEARCHES:
+            time.sleep(MIN_SECONDS_BETWEEN_SEARCHES - elapsed)
+        self._last_search_at = time.time()
+
     def run(self, query: str) -> str:
-        # STUB: replace with a real search API call.
-        return f"[stub result] Top findings for '{query}': ..."
+        self._throttle()
+        # Over-fetch a little, since some results get dropped as ads.
+        results = DDGS().text(query, max_results=MAX_RESULTS + 3)
+        organic = [r for r in results if not _is_advertisement(r["href"])][:MAX_RESULTS]
+
+        if not organic:
+            # Not an error - the search worked and found nothing usable. Say so
+            # plainly so the model doesn't read silence as permission to invent.
+            return f"No search results found for '{query}'."
+
+        # Results are separated by a blank line, which is also the boundary the
+        # retrieval agent chunks on - so passing this straight to index_documents
+        # stores one document per result rather than one blob.
+        # The URL is included so indexed documents carry their provenance and a
+        # reader of the final answer can check it.
+        return "\n\n".join(
+            f"{r['title']}\n{r['body']}\nSource: {r['href']}" for r in organic
+        )
 
 
 search_service = SearchService()

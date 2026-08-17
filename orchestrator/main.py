@@ -48,9 +48,52 @@ async def arun(task: str) -> str:
     return final_state["messages"][-1].get("content", "")
 
 
+async def arun_traced(task: str) -> tuple[str, list[str]]:
+    """
+    Like arun, but also returns the tool names that were called, in order.
+
+    The evaluation harness needs this: "did it reach for the right tools" is a
+    separate question from "is the final text any good", and the tool history is
+    the only place the first question can be answered. Checking the final text
+    for tool names would be guesswork.
+    """
+    registry = MCPToolRegistry()
+    await registry.discover()
+
+    if not registry.tools:
+        raise RuntimeError(
+            "No MCP tools discovered - are the agent servers running? "
+            "See orchestrator/config.py for the URLs being tried."
+        )
+
+    graph = build_graph(registry, get_provider())
+    final_state = await graph.ainvoke(
+        {
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": task},
+            ],
+            "iterations": 0,
+        }
+    )
+
+    tools_called = [
+        call["name"]
+        for message in final_state["messages"]
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls", [])
+    ]
+    return final_state["messages"][-1].get("content", ""), tools_called
+
+
 def run(task: str) -> str:
     """Synchronous wrapper - eval/run_eval.py drives the system through this."""
     return asyncio.run(arun(task))
+
+
+def run_traced(task: str) -> tuple[str, list[str]]:
+    """Synchronous wrapper around arun_traced."""
+    return asyncio.run(arun_traced(task))
 
 
 if __name__ == "__main__":

@@ -1,2 +1,4 @@
 mcp[cli]>=1.27,<2
 prometheus-client>=0.20.0
+sqlite-vec>=0.1.9
+ollama>=0.5.0

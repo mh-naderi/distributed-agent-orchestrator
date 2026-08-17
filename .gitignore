@@ -5,3 +5,7 @@ venv/
 .env
 *.log
 .pytest_cache/
+
+# Local vector index. In Kubernetes this lives on a PersistentVolume; locally
+# it's a working file that shouldn't be committed.
+data/

@@ -31,7 +31,7 @@ import os
 # namespace, so the agents keep port 8000 there and the manifests are unchanged.
 AGENT_URLS = {
     "research": os.environ.get("RESEARCH_AGENT_URL", "http://localhost:18000/mcp"),
-    "summarizer": os.environ.get("SUMMARIZER_AGENT_URL", "http://localhost:18001/mcp"),
+    "retrieval": os.environ.get("RETRIEVAL_AGENT_URL", "http://localhost:18001/mcp"),
     "code_analysis": os.environ.get("CODE_ANALYSIS_AGENT_URL", "http://localhost:18002/mcp"),
 }
 
@@ -44,4 +44,12 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 # The model must support tool calling - not all local models do, and one that
 # doesn't will simply answer in prose and never emit a tool call, which looks
 # like a broken graph but isn't. See the README for verified-working options.
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3")
+#
+# qwen3:4b is the verified default: it fits entirely in 4GB of VRAM and handles
+# this tool surface correctly. The bare "qwen3" tag resolves to the 8B build,
+# which spills to CPU on a 4GB card.
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+
+# Used by the retrieval agent, not the orchestrator - kept here so every model
+# choice in the project is visible in one place. 768 dimensions, ~274MB.
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")

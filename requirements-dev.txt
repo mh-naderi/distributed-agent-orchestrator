@@ -2,5 +2,10 @@
 # minimal, see each agent's own requirements.txt.
 -r orchestrator/requirements.txt
 
+# The agent-side libraries, needed because the tests import the retrieval
+# agent's store and exercise the research agent's search service.
+sqlite-vec>=0.1.9
+ddgs>=9.0
+
 pytest>=8.0
 pytest-asyncio>=0.24

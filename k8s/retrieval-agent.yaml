@@ -1,0 +1,110 @@
+# The retrieval agent is the only STATEFUL service in this system, and that is
+# why it's a StatefulSet rather than a Deployment like the other two agents.
+#
+# A Deployment treats its pods as interchangeable: any pod can be killed and
+# replaced by an identical one, because they hold nothing worth keeping. That is
+# exactly right for the research and code-analysis agents.
+#
+# This agent owns a sqlite index that has to outlive the process. A StatefulSet
+# gives it what that needs:
+#   - a stable pod identity (retrieval-agent-0, not a random hash suffix)
+#   - volumeClaimTemplates, so each replica gets its OWN PersistentVolumeClaim,
+#     bound to it by name and reattached to the same pod after a restart
+#   - ordered, graceful startup and shutdown rather than all-at-once churn
+#
+# Note replicas: 1, deliberately. Scaling this to 3 would NOT give you three
+# workers sharing an index - it would give you three pods each with a separate
+# volume and a separate, divergent corpus, so a document indexed via one pod
+# would be invisible to queries routed to the others. Sharing one index across
+# replicas needs a different design (a real vector database, or read replicas
+# over shared storage). That constraint is the thing to understand about stateful
+# services, and it's why the stateless agents are the ones that scale freely.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: retrieval-agent-headless
+  labels:
+    app: retrieval-agent
+spec:
+  # clusterIP: None makes this a headless Service: it does no load balancing and
+  # instead gives each pod its own DNS record
+  # (retrieval-agent-0.retrieval-agent-headless). A StatefulSet requires one -
+  # stable identity is meaningless if you can't address a specific pod.
+  clusterIP: None
+  selector: { app: retrieval-agent }
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retrieval-agent-service
+  labels:
+    app: retrieval-agent  # lets Prometheus's kubernetes_sd_configs find this
+spec:
+  # The ordinary Service the orchestrator calls. With one replica it resolves to
+  # the single pod; it exists so callers use one stable name and don't have to
+  # know about StatefulSet pod naming.
+  selector: { app: retrieval-agent }
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9101
+      targetPort: 9101
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: retrieval-agent
+spec:
+  serviceName: retrieval-agent-headless  # must match the headless Service above
+  replicas: 1
+  selector:
+    matchLabels: { app: retrieval-agent }
+  template:
+    metadata:
+      labels: { app: retrieval-agent }
+    spec:
+      containers:
+        - name: retrieval-agent
+          image: agent-orchestrator/retrieval-agent:latest
+          imagePullPolicy: IfNotPresent  # so kind/minikube uses the locally-built image
+          ports:
+            - containerPort: 8000  # MCP protocol
+            - containerPort: 9101  # Prometheus metrics
+          env:
+            # Ollama runs on the host machine, not in the cluster - this is the
+            # project's first genuine cross-boundary dependency. host.docker.internal
+            # resolves to the host from inside Docker Desktop and kind; on other
+            # setups this needs to be the host's cluster-reachable address.
+            - name: OLLAMA_HOST
+              value: "http://host.docker.internal:11434"
+            - name: EMBEDDING_MODEL
+              value: "nomic-embed-text"
+            - name: RETRIEVAL_DB_PATH
+              value: "/data/retrieval.db"
+          volumeMounts:
+            - name: index
+              mountPath: /data
+          readinessProbe:
+            # The agent has to load the sqlite-vec extension and open the index
+            # before it can serve anything. On a large corpus that is not
+            # instant, and routing traffic to a pod mid-warm-up produces
+            # confusing empty results rather than an honest failure.
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: index
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

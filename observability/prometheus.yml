@@ -16,4 +16,4 @@ scrape_configs:
       # Only scrape pods that expose a metrics port (9100/9101/9102)
       - source_labels: [__meta_kubernetes_pod_label_app]
         action: keep
-        regex: (research-agent|summarizer-agent|code-analysis-agent)
+        regex: (research-agent|retrieval-agent|code-analysis-agent)

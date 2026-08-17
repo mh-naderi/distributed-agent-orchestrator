@@ -1,4 +1,4 @@
-langgraph>=0.2.0
+langgraph>=1.2,<2  # pinned below the next major: >=0.2.0 silently resolved to 1.x
 mcp[cli]>=1.27,<2
 anthropic>=0.40.0
 ollama>=0.5.0  # >=0.5 for tool_name on tool-role messages

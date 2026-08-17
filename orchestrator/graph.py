@@ -35,7 +35,21 @@ SYSTEM_PROMPT = """You are an orchestrator with access to specialist tools.
 Use the tools when they would genuinely help answer the user's request, and
 call them one step at a time - look at each result before deciding what to do
 next. When you have enough information, stop calling tools and write the final
-answer directly."""
+answer directly.
+
+For questions that need external information, work in this order:
+
+1. Call retrieve first, to check whether relevant material has already been
+   stored from earlier work. The index persists between runs, so it may
+   already hold what you need.
+2. If retrieve finds nothing useful, call search_web.
+3. If you called search_web, you MUST then call index_documents, passing the
+   search results verbatim, before writing your answer. This step stores what
+   you found for future questions. It does not help the answer you are writing
+   now, so it is easy to skip - do not skip it.
+
+Base your answer only on what the tools actually returned. If they returned
+nothing useful, say so plainly rather than filling the gap from memory."""
 
 
 def build_graph(registry: MCPToolRegistry, provider: LLMProvider):

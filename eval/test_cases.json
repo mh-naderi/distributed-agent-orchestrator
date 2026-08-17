@@ -2,13 +2,23 @@
   {
     "id": "mcp-adoption-summary",
     "task": "Research the current state of MCP adoption and summarize it in two paragraphs.",
-    "expected_tools": ["search_web", "summarize"],
+    "required_tools": ["search_web"],
+    "allowed_tools": ["retrieve", "index_documents"],
     "must_contain": ["MCP", "protocol"]
+  },
+  {
+    "id": "cached-retrieval",
+    "task": "What is the Model Context Protocol?",
+    "required_tools": ["retrieve"],
+    "allowed_tools": ["search_web", "index_documents"],
+    "must_contain": ["protocol"],
+    "note": "Run after mcp-adoption-summary. Exercises the persistent corpus: the answer should come from the index rather than a fresh search."
   },
   {
     "id": "code-review-basic",
     "task": "Analyze this Python function for issues: def add(a, b): return a+b",
-    "expected_tools": ["analyze_code"],
+    "required_tools": ["analyze_code"],
+    "allowed_tools": [],
     "must_contain": []
   }
 ]

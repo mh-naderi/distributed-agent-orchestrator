@@ -8,8 +8,10 @@ handshake, tool discovery, and live tool execution over Streamable HTTP.
 
 Start the agents first:
     MCP_PORT=18000 python agents/research_agent/server.py
-    MCP_PORT=18001 python agents/summarizer_agent/server.py
+    MCP_PORT=18001 python agents/retrieval_agent/server.py
     MCP_PORT=18002 python agents/code_analysis_agent/server.py
+
+The retrieval agent also needs Ollama running with the embedding model pulled.
 """
 
 import pytest
@@ -30,7 +32,8 @@ async def test_discovers_every_agents_tools(registry):
     """One registry, three separate services - this is the multi-server payoff."""
     assert {tool["name"] for tool in registry.tools} == {
         "search_web",
-        "summarize",
+        "index_documents",
+        "retrieve",
         "analyze_code",
     }
 
@@ -45,18 +48,58 @@ async def test_discovered_tools_carry_usable_schemas(registry):
     assert search["input_schema"]["required"] == ["query"]
 
 
-@pytest.mark.parametrize(
-    "name, arguments, expected_fragment",
-    [
-        ("search_web", {"query": "MCP adoption"}, "[stub result]"),
-        ("summarize", {"text": "some text to summarize"}, "[stub summary]"),
-        ("analyze_code", {"code": "def add(a, b): return a + b"}, "[stub analysis]"),
-    ],
-)
-async def test_calls_are_routed_to_the_owning_agent(registry, name, arguments, expected_fragment):
+async def test_index_then_retrieve_round_trip(registry):
+    """
+    Exercises both retrieval tools across the network, and incidentally proves
+    dispatch works - both tools live on the retrieval agent, search_web doesn't.
+    """
+    marker = "Xylophone Quarks Institute studies imaginary particles"
+
+    indexed = await registry.call(
+        "index_documents", {"texts": [marker], "source": "integration-test"}
+    )
+    assert "Indexed 1 document" in indexed
+
+    found = await registry.call("retrieve", {"query": "xylophone quarks", "k": 3})
+    assert "Xylophone Quarks Institute" in found
+    assert "integration-test" in found
+
+
+async def test_retrieve_says_so_when_nothing_matches(registry):
+    """
+    An empty result must read as empty. A blank-but-successful-looking response
+    is what led the model to invent answers when search was stubbed.
+    """
+    result = await registry.call(
+        "retrieve", {"query": "zzzqqq nonexistent gibberish topic", "k": 1}
+    )
+    assert result.strip()
+
+
+async def test_search_returns_real_results_with_sources(registry):
+    """Should return actual web content, not a stub string."""
+    result = await registry.call("search_web", {"query": "Model Context Protocol"})
+
+    assert "[stub" not in result
+    assert "Source: http" in result
+
+
+async def test_search_results_exclude_advertisements(registry):
+    """
+    Sponsored results arrive looking like organic ones. Left in, they get
+    indexed and cited as evidence - an early run had the model reporting a
+    vendor's ebook marketing as a finding.
+    """
+    result = await registry.call("search_web", {"query": "kubernetes security"})
+
+    for marker in ("/aclick", "duckduckgo.com/y.js", "doubleclick.net"):
+        assert marker not in result
+
+
+async def test_calls_are_routed_to_the_owning_agent(registry):
     """Dispatch is a lookup in the ownership map built during discovery."""
-    result = await registry.call(name, arguments)
-    assert expected_fragment in result
+    result = await registry.call("analyze_code", {"code": "def add(a, b): return a + b"})
+    assert "[stub analysis]" in result
 
 
 async def test_unknown_tool_returns_an_error_string(registry):
