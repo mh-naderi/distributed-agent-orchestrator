@@ -21,7 +21,7 @@ from typing import Protocol
 
 import ollama
 
-from orchestrator.config import OLLAMA_HOST, OLLAMA_MODEL
+from orchestrator.config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_THINK
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +73,14 @@ class OllamaProvider:
     isn't. If tools are never called, check the model before the loop.
     """
 
-    def __init__(self, model: str = OLLAMA_MODEL, host: str = OLLAMA_HOST):
+    def __init__(
+        self,
+        model: str = OLLAMA_MODEL,
+        host: str = OLLAMA_HOST,
+        think=OLLAMA_THINK,
+    ):
         self.model = model
+        self._think = think
         self._client = ollama.AsyncClient(host=host)
 
     @staticmethod
@@ -150,6 +156,7 @@ class OllamaProvider:
             model=self.model,
             messages=self._to_ollama_messages(messages),
             tools=self._to_ollama_tools(tools),
+            think=self._think,
         )
 
         message = response.message

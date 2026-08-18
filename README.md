@@ -180,16 +180,49 @@ MCP_PORT=18002 .venv/Scripts/python.exe agents/code_analysis_agent/server.py
 .venv/Scripts/python.exe -m orchestrator.main
 ```
 
-### Kubernetes (week 2)
+### Kubernetes
 
-1. Install [kind](https://kind.sigs.k8s.io/) or minikube, and Docker.
-2. Build agent images: `docker build -t agent-orchestrator/research-agent:latest agents/research_agent` (repeat per agent)
-3. `kind create cluster`
-4. `kind load docker-image agent-orchestrator/research-agent:latest` (repeat per agent)
-5. `kubectl apply -f k8s/`
+```bash
+winget install --id Kubernetes.kind --source winget
+```
 
-The retrieval agent reaches Ollama on the host via `host.docker.internal`,
-set in its manifest - the project's one cross-boundary dependency.
+```bash
+kind create cluster --name agent-orchestrator
+```
+
+Build each image and load it into the cluster (repeat per agent — the manifests
+use `imagePullPolicy: IfNotPresent`, so the node needs a local copy):
+
+```bash
+docker build -t agent-orchestrator/research-agent:latest agents/research_agent
+```
+
+```bash
+kind load docker-image agent-orchestrator/research-agent:latest --name agent-orchestrator
+```
+
+```bash
+kubectl apply -f k8s/
+```
+
+The agents' Services are `ClusterIP`, so the orchestrator — which runs on the
+host — reaches them by port-forwarding onto the same ports its config already
+defaults to:
+
+```bash
+kubectl port-forward service/retrieval-agent-service 18001:8000
+```
+
+The retrieval agent reaches Ollama back on the host via `host.docker.internal`.
+That works on Docker Desktop, where a DNS resolver knows the name and the
+network proxy can reach services bound to the host's loopback interface — which
+matters, since Ollama binds `127.0.0.1` by default. It does not generalise to
+kind over native Linux Docker; see the comments in `k8s/retrieval-agent.yaml`.
+
+**Resource note:** the cluster and local inference compete on a 16GB laptop.
+Running kind alongside a 4B model leaves little headroom, and heavy GPU
+contention while Docker Desktop's WSL2 backend is active has been observed to
+destabilise the NVIDIA driver.
 
 ## Tests
 

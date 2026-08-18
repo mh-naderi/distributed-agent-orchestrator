@@ -79,9 +79,20 @@ spec:
             - containerPort: 9101  # Prometheus metrics
           env:
             # Ollama runs on the host machine, not in the cluster - this is the
-            # project's first genuine cross-boundary dependency. host.docker.internal
-            # resolves to the host from inside Docker Desktop and kind; on other
-            # setups this needs to be the host's cluster-reachable address.
+            # project's first genuine cross-boundary dependency.
+            #
+            # host.docker.internal is VERIFIED WORKING from pods on Docker
+            # Desktop + kind: Docker Desktop runs a DNS resolver that knows the
+            # name, kind's CoreDNS forwards unresolved names to it, and Docker
+            # Desktop's network proxy can reach services bound to the host's
+            # LOOPBACK interface. That last part matters - Ollama binds
+            # 127.0.0.1 by default.
+            #
+            # It does NOT generalise. On kind over native Linux Docker the name
+            # does not exist, and the raw bridge gateway (172.18.0.1) is refused
+            # because Ollama is not listening on it. Fixing that means either
+            # binding Ollama to 0.0.0.0 (which exposes it to the network) or
+            # adding a hostAliases entry pointing at the node gateway.
             - name: OLLAMA_HOST
               value: "http://host.docker.internal:11434"
             - name: EMBEDDING_MODEL

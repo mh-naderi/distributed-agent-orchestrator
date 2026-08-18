@@ -50,6 +50,16 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 # which spills to CPU on a 4GB card.
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 
+# Qwen3 and similar models generate an extended reasoning block before
+# answering. That is useful for hard problems and pure overhead here: the
+# orchestrator's job is picking a tool, and thinking made the first call take
+# over ten minutes against the cluster. Off by default; set to "low", "medium",
+# "high" or "true" to re-enable.
+_think = os.environ.get("OLLAMA_THINK", "off").strip().lower()
+OLLAMA_THINK = False if _think in ("off", "false", "0", "no", "") else (
+    True if _think == "true" else _think
+)
+
 # Used by the retrieval agent, not the orchestrator - kept here so every model
 # choice in the project is visible in one place. 768 dimensions, ~274MB.
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
