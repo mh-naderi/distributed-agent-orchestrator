@@ -28,7 +28,72 @@ scaled, and monitored independently. Prometheus scrapes per-agent metrics
 (latency, call counts, error rates, corpus size) via Kubernetes service
 discovery; Grafana dashboards visualize them.
 
-_(Architecture diagram: TODO)_
+### System diagram
+
+```mermaid
+flowchart TB
+    TASK(["User task"])
+
+    subgraph HOST["Host machine"]
+        direction TB
+        ORCH["Orchestrator — LangGraph<br/>reason → act → reason loop<br/>max-iteration guardrail"]
+        OLLAMA["Ollama :11434<br/>qwen3:4b — reasoning<br/>nomic-embed-text — embeddings"]
+    end
+
+    subgraph CLUSTER["Kubernetes cluster"]
+        direction TB
+        subgraph AGENTS["MCP agents — Streamable HTTP on /mcp"]
+            direction TB
+            RES["research-agent · Deployment<br/>:8000 mcp · :9100 metrics<br/>search_web"]
+            RET["retrieval-agent · StatefulSet<br/>:8000 mcp · :9101 metrics<br/>index_documents · retrieve"]
+            CODE["code-analysis-agent · Deployment<br/>:8000 mcp · :9102 metrics<br/>analyze_code"]
+        end
+        PVC[("PersistentVolume<br/>sqlite-vec index")]
+        PROM["Prometheus<br/>kubernetes_sd_configs"]
+        GRAF["Grafana"]
+    end
+
+    WEB(["DuckDuckGo<br/>via ddgs — no API key"])
+
+    TASK --> ORCH
+    ORCH <-->|"messages + tool schemas"| OLLAMA
+    ORCH ==>|"tool calls over MCP"| AGENTS
+
+    RES -->|"web search"| WEB
+    RET -->|"embed"| OLLAMA
+    RET <--> PVC
+
+    AGENTS -.->|"scrape /metrics"| PROM
+    PROM --> GRAF
+
+    classDef stateful fill:#fcd34d,stroke:#b45309,color:#111
+    classDef stateless fill:#bfdbfe,stroke:#1d4ed8,color:#111
+    classDef external fill:#e5e7eb,stroke:#6b7280,color:#111
+    classDef core fill:#bbf7d0,stroke:#15803d,color:#111
+    classDef obs fill:#e9d5ff,stroke:#7e22ce,color:#111
+
+    class RET,PVC stateful
+    class RES,CODE stateless
+    class WEB,OLLAMA external
+    class ORCH core
+    class PROM,GRAF obs
+```
+
+**Reading the diagram.** Solid arrows are request paths, dotted arrows are
+metrics scraping. The amber components are the only **stateful** part of the
+system — the retrieval agent and its volume — which is why that one agent is a
+StatefulSet while the blue agents are Deployments. The blue agents can be scaled
+to any number of replicas; the amber one cannot, because each replica would get
+its own volume and its own divergent corpus.
+
+Two edges cross the host/cluster boundary and are worth noting: the orchestrator
+reaches the agents from outside the cluster (their Services are `ClusterIP`, so
+this needs `kubectl port-forward`, a `NodePort`, or moving the orchestrator
+in-cluster), and the retrieval agent calls back out to Ollama on the host via
+`host.docker.internal`.
+
+> This is the target topology. Today the orchestrator and all three agents run
+> as local processes on the host; the Kubernetes deployment is Week 2.
 
 ## Why multiple small MCP servers instead of one
 
