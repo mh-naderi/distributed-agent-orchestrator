@@ -69,14 +69,29 @@ spec:
   template:
     metadata:
       labels: { app: retrieval-agent }
+      annotations:
+        # Discovery is opt-in per pod. Prometheus keeps any pod carrying
+        # prometheus.io/scrape=true and scrapes the port named here - so adding
+        # a fourth agent means annotating it, not editing Prometheus's config.
+        # The previous config filtered on a hardcoded list of agent names,
+        # which contradicted the claim that new agents appear automatically.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: retrieval-agent
           image: agent-orchestrator/retrieval-agent:latest
           imagePullPolicy: IfNotPresent  # so kind/minikube uses the locally-built image
           ports:
-            - containerPort: 8000  # MCP protocol
-            - containerPort: 9101  # Prometheus metrics
+            # Named on purpose: Prometheus selects the scrape target by port
+            # NAME rather than by matching numbers. Its relabel regexes are RE2,
+            # which has no backreferences, so "container port == annotated port"
+            # cannot be expressed as a pattern - and a name is clearer anyway.
+            - name: mcp
+              containerPort: 8000
+            - name: metrics
+              containerPort: 9101
           env:
             # Ollama runs on the host machine, not in the cluster - this is the
             # project's first genuine cross-boundary dependency.

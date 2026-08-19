@@ -1,0 +1,183 @@
+# Grafana, with its datasource and dashboard PROVISIONED FROM CONFIGMAPS rather
+# than clicked in through the UI.
+#
+# That distinction matters for a system meant to be reproducible: a dashboard
+# configured by hand lives only in that container's database and dies with the
+# pod. Provisioning means `kubectl apply -f k8s/` produces a working dashboard
+# on a fresh cluster with no manual steps, and the dashboard itself is reviewable
+# in version control like any other code.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        # In-cluster DNS: Grafana reaches Prometheus by Service name, so this
+        # works regardless of pod IPs.
+        url: http://prometheus-service:9090
+        isDefault: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: agent-orchestrator
+        folder: ""
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard
+data:
+  agents.json: |
+    {
+      "title": "Agent Orchestrator",
+      "uid": "agent-orchestrator",
+      "timezone": "browser",
+      "refresh": "10s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Agents up",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "targets": [
+            { "expr": "sum(up{job=\"agents\"})", "legendFormat": "up" }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Documents in corpus",
+          "description": "A stateless agent's metrics are all flow. This one has a size - and it is the number that should survive a pod restart.",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "targets": [
+            { "expr": "retrieval_documents_total", "legendFormat": "documents" }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Tool calls (total)",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "targets": [
+            { "expr": "sum(tool_calls_total)", "legendFormat": "calls" }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Errors (total)",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "targets": [
+            { "expr": "sum(tool_calls_total{status=\"error\"}) or vector(0)", "legendFormat": "errors" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Tool call rate by tool",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "targets": [
+            { "expr": "sum by (tool_name) (rate(tool_calls_total[5m]))", "legendFormat": "{{tool_name}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "p95 tool latency by tool",
+          "description": "Computed from the histogram - this is why tool_call_duration_seconds is a Histogram and not a Gauge.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, tool_name) (rate(tool_call_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{tool_name}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+        },
+        {
+          "type": "timeseries",
+          "title": "Error rate by tool",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "targets": [
+            { "expr": "sum by (tool_name) (rate(tool_calls_total{status=\"error\"}[5m]))", "legendFormat": "{{tool_name}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Calls by agent",
+          "description": "Per-agent attribution comes from the relabel rules in the Prometheus config, not from the agents themselves.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "targets": [
+            { "expr": "sum by (agent) (rate(tool_calls_total[5m]))", "legendFormat": "{{agent}}" }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  labels:
+    app: grafana
+spec:
+  selector: { app: grafana }
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: grafana }
+  template:
+    metadata:
+      labels: { app: grafana }
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.5.1
+          ports:
+            - containerPort: 3000
+          env:
+            # Local development only. Anonymous admin access removes the login
+            # wall so the dashboard is visible immediately; this would be
+            # indefensible anywhere reachable from a network you don't control.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+          resources:
+            requests: { memory: "128Mi", cpu: "50m" }
+            limits: { memory: "384Mi" }
+          volumeMounts:
+            - name: datasource
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboard
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasource
+          configMap: { name: grafana-datasource }
+        - name: dashboard-provider
+          configMap: { name: grafana-dashboard-provider }
+        - name: dashboard
+          configMap: { name: grafana-dashboard }

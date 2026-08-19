@@ -156,6 +156,40 @@ advertisement from a source, so the filtering happens in the research agent.
   already in context. The index step pays off on *later* runs, which is exactly
   why the store has to be persistent.
 
+## Observability
+
+Prometheus runs in-cluster so it can use the Kubernetes API for service
+discovery rather than a hardcoded target list. Three things about that turned
+out to matter more than expected, and all three fail quietly:
+
+- **RBAC is not optional.** `kubernetes_sd_configs` works by calling the
+  Kubernetes API. A pod cannot do that without a ServiceAccount bound to a role
+  granting list/watch on pods; without it discovery returns 403 and Prometheus
+  sits with zero targets and nothing obviously wrong on screen.
+- **`role: pod` creates one target per declared container port.** Each agent
+  declares two (MCP and metrics), so a naive config produces six targets, three
+  permanently failing, because `/metrics` on the MCP port does not exist. The
+  fix is to name the ports and keep only `metrics`.
+- **Prometheus relabel regexes are RE2, which has no backreferences.** An
+  earlier attempt matched "container port equals annotated port" with a ``
+  backreference; Prometheus rejected the config outright at load. Selecting by
+  port *name* is both valid and clearer.
+
+Discovery is annotation-driven (`prometheus.io/scrape`), not a regex over agent
+names. The earlier config filtered on a hardcoded list of the three agent names
+while the comment above it claimed new agents would appear automatically - which
+was false. Annotations make the claim true.
+
+Grafana's datasource and dashboard are provisioned from ConfigMaps. A dashboard
+built by clicking through the UI lives only in that container's database and
+dies with the pod; provisioned, it is reproducible from `kubectl apply` and
+reviewable in version control.
+
+Prometheus stores metrics on an `emptyDir` with short retention, deliberately in
+contrast to the retrieval agent's PersistentVolume: metrics here are disposable,
+the index is not. Both workloads carry explicit memory limits, because the
+cluster shares a 16GB laptop with Docker's VM and local inference.
+
 ## Known gaps
 
 - Schema-invalid tool input is rejected by FastMCP *before* the instrumented

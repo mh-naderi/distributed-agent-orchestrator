@@ -92,8 +92,9 @@ this needs `kubectl port-forward`, a `NodePort`, or moving the orchestrator
 in-cluster), and the retrieval agent calls back out to Ollama on the host via
 `host.docker.internal`.
 
-> This is the target topology. Today the orchestrator and all three agents run
-> as local processes on the host; the Kubernetes deployment is Week 2.
+> This is the deployed topology. All three agents, Prometheus and Grafana run in
+> a local kind cluster; the orchestrator and Ollama run on the host. The agents
+> can also be run directly as host processes for development — see below.
 
 ## Why multiple small MCP servers instead of one
 
@@ -248,11 +249,34 @@ Results: TODO, populate after the LLM-judge pass is implemented.
 
 ## Observability
 
-Grafana dashboard screenshots: TODO.
+Prometheus and Grafana deploy with everything else via `kubectl apply -f k8s/`.
+
+```bash
+kubectl port-forward service/grafana-service 13000:3000
+```
+
+Grafana comes up at `localhost:13000` with the Prometheus datasource and the
+"Agent Orchestrator" dashboard already provisioned from ConfigMaps — no
+click-through setup, and the dashboard is reviewable in version control rather
+than trapped in a container's database.
 
 Per-agent metrics on ports 9100-9102: `tool_calls_total{tool_name,status}`,
-`tool_call_duration_seconds`, and `retrieval_documents_total` (corpus size -
-a stateless agent's metrics are all flow, a stateful one also has a size).
+`tool_call_duration_seconds` (a Histogram, so p95 is computable rather than just
+an average), and `retrieval_documents_total` — corpus size, because a stateless
+agent's metrics are all flow while a stateful one also has a size.
+
+Discovery is **annotation-driven**: Prometheus keeps any pod carrying
+`prometheus.io/scrape: "true"` and scrapes the port named `metrics`. Adding a
+fourth agent means annotating it, not editing the Prometheus config — which is
+what "service discovery" is supposed to buy you.
+
+Two details that fail silently if you get them wrong, both covered in
+`k8s/prometheus.yaml`: Prometheus needs **RBAC** to call the Kubernetes API for
+discovery at all, and with `role: pod` it creates one target *per declared
+container port* — so without filtering to the metrics port you get twice the
+targets, half of them permanently red.
+
+Grafana dashboard screenshots: TODO.
 
 ## Status
 
