@@ -21,7 +21,13 @@ from typing import Protocol
 
 import ollama
 
-from orchestrator.config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_THINK
+from orchestrator.config import (
+    OLLAMA_HOST,
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_MODEL,
+    OLLAMA_THINK,
+    ollama_options,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +163,10 @@ class OllamaProvider:
             messages=self._to_ollama_messages(messages),
             tools=self._to_ollama_tools(tools),
             think=self._think,
+            # Bounded context and prompt unloading, so two models don't sit in
+            # 4GB of VRAM at once - see orchestrator/config.py.
+            options=ollama_options(),
+            keep_alive=OLLAMA_KEEP_ALIVE,
         )
 
         message = response.message

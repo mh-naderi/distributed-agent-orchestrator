@@ -34,11 +34,15 @@ Three concepts worth understanding before reading the code:
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import (
+    create_mcp_http_client,
+    streamable_http_client,
+)
 
-from orchestrator.config import AGENT_URLS
+from orchestrator.config import AGENT_URLS, MCP_HTTP_TIMEOUT, MCP_READ_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +60,23 @@ async def _session(url: str):
     (Note the underscores: the older streamablehttp_client spelling still
     exists in the SDK but is deprecated.)
     """
-    async with streamable_http_client(url) as (read_stream, write_stream, _get_session_id):
-        async with ClientSession(read_stream, write_stream) as session:
+    # Two independent timeouts. Without them a wedged agent hangs the whole
+    # orchestrator: the max-iteration guardrail limits how many times the loop
+    # runs, not how long a single call may block. This is not hypothetical -
+    # when the GPU driver failed mid-development, calls stopped returning and
+    # the run hung until killed by hand.
+    http_client = create_mcp_http_client(timeout=MCP_HTTP_TIMEOUT)
+
+    async with streamable_http_client(url, http_client=http_client) as (
+        read_stream,
+        write_stream,
+        _get_session_id,
+    ):
+        async with ClientSession(
+            read_stream,
+            write_stream,
+            read_timeout_seconds=timedelta(seconds=MCP_READ_TIMEOUT),
+        ) as session:
             await session.initialize()
             yield session
 

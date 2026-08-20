@@ -36,6 +36,32 @@ spec:
               containerPort: 8000
             - name: metrics
               containerPort: 9100
+          resources:
+            # Limits, not just requests. Without a limit one agent can consume
+            # whatever the node has, which on a laptop sharing RAM with Docker's
+            # VM and local inference means starving everything else. The
+            # retrieval agent gets more headroom because it holds an index and
+            # embeds batches; the other two are thin adapters over stubs.
+            requests: { memory: "64Mi", cpu: "50m" }
+            limits: { memory: "256Mi" }
+          livenessProbe:
+            # Kubernetes restarts a CRASHED container for free. A HUNG one -
+            # still holding its socket, answering nothing - stays Running
+            # forever without this. That is the failure this probe exists for,
+            # and it is the one actually observed in this project when a
+            # dependency wedged.
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            # Readiness gates TRAFFIC, liveness gates RESTARTS. A pod that is
+            # alive but not ready should be left alone, not killed.
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service

@@ -10,6 +10,7 @@ Prerequisites for a run:
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
@@ -48,14 +49,31 @@ async def arun(task: str) -> str:
     return final_state["messages"][-1].get("content", "")
 
 
-async def arun_traced(task: str) -> tuple[str, list[str]]:
+@dataclass
+class TraceResult:
     """
-    Like arun, but also returns the tool names that were called, in order.
+    Everything the evaluation harness needs from one run.
 
-    The evaluation harness needs this: "did it reach for the right tools" is a
-    separate question from "is the final text any good", and the tool history is
-    the only place the first question can be answered. Checking the final text
-    for tool names would be guesswork.
+    tool_outputs matters as much as the answer: the most important question for
+    this system is not "does the answer sound right" but "is it supported by
+    what the tools actually returned". Judging the text alone cannot tell the
+    difference between a grounded answer and a fluent invention - which this
+    project has produced before, with a fabricated statistic.
+    """
+
+    answer: str
+    tools_called: list[str]
+    tool_outputs: list[dict]
+    iterations: int
+
+
+async def arun_traced(task: str) -> TraceResult:
+    """
+    Like arun, but records what happened along the way.
+
+    "Did it reach for the right tools" and "is the final text any good" are
+    separate questions, and the tool history is the only place the first one can
+    be answered. Scanning the answer for tool names would be guesswork.
     """
     registry = MCPToolRegistry()
     await registry.discover()
@@ -77,13 +95,25 @@ async def arun_traced(task: str) -> tuple[str, list[str]]:
         }
     )
 
+    messages = final_state["messages"]
     tools_called = [
         call["name"]
-        for message in final_state["messages"]
+        for message in messages
         if message["role"] == "assistant"
         for call in message.get("tool_calls", [])
     ]
-    return final_state["messages"][-1].get("content", ""), tools_called
+    tool_outputs = [
+        {"name": m.get("name", "?"), "output": m.get("content", "")}
+        for m in messages
+        if m["role"] == "tool"
+    ]
+
+    return TraceResult(
+        answer=messages[-1].get("content", ""),
+        tools_called=tools_called,
+        tool_outputs=tool_outputs,
+        iterations=final_state["iterations"],
+    )
 
 
 def run(task: str) -> str:
@@ -91,8 +121,8 @@ def run(task: str) -> str:
     return asyncio.run(arun(task))
 
 
-def run_traced(task: str) -> tuple[str, list[str]]:
-    """Synchronous wrapper around arun_traced."""
+def run_traced(task: str) -> TraceResult:
+    """Synchronous wrapper around arun_traced - eval/run_eval.py uses this."""
     return asyncio.run(arun_traced(task))
 
 

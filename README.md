@@ -37,7 +37,7 @@ flowchart TB
     subgraph HOST["Host machine"]
         direction TB
         ORCH["Orchestrator — LangGraph<br/>reason → act → reason loop<br/>max-iteration guardrail"]
-        OLLAMA["Ollama :11434<br/>qwen3:4b — reasoning<br/>nomic-embed-text — embeddings"]
+        OLLAMA["Ollama :11434<br/>qwen3:1.7b — reasoning<br/>nomic-embed-text — embeddings"]
     end
 
     subgraph CLUSTER["Kubernetes cluster"]
@@ -129,17 +129,30 @@ winget install --id Ollama.Ollama --source winget
 ```
 
 ```bash
-ollama pull qwen3:4b
+ollama pull qwen3:1.7b
 ```
 
 ```bash
 ollama pull nomic-embed-text
 ```
 
-`qwen3:4b` fits entirely in 4GB of VRAM and handles this tool surface
-reliably. The model **must** support tool calling - one that doesn't will
-answer in prose and never emit a tool call, which looks like a broken graph
-but isn't. Check with `ollama show <model>` and look for `tools`.
+The model **must** support tool calling — one that doesn't will answer in prose
+and never emit a tool call, which looks like a broken graph but isn't. Check
+with `ollama show <model>` and look for `tools`.
+
+`qwen3:1.7b` is the default because it was measured, not assumed. Both it and
+`qwen3:4b` emit valid tool calls for this four-tool surface; the difference is
+what they cost on a 4GB laptop GPU:
+
+| model | VRAM | GPU temp | wall time |
+|---|---|---|---|
+| `qwen3:1.7b` | 3157 MiB | **64 °C** | 3.3 s |
+| `qwen3:4b` | 3690 MiB | **84 °C** | 14.5 s |
+
+The 4B follows ordering instructions slightly better and pays 20 °C and 4× the
+wall clock for it. On a thin chassis that heat becomes thermal throttling, which
+slows the whole machine. Set `OLLAMA_MODEL=qwen3:4b` when quality matters more
+than heat.
 
 ### 2. Install Python dependencies
 

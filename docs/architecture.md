@@ -190,6 +190,42 @@ contrast to the retrieval agent's PersistentVolume: metrics here are disposable,
 the index is not. Both workloads carry explicit memory limits, because the
 cluster shares a 16GB laptop with Docker's VM and local inference.
 
+## Hardware constraints, and what they forced
+
+The "everything runs locally, no cloud budget" constraint collided with a real
+ceiling: a thin laptop with 16GB RAM, a 4GB laptop GPU, and an H-series CPU.
+Local LLM inference is a sustained 100%-utilisation workload by nature, and this
+chassis cannot hold that without thermal throttling - which slows everything
+else on the machine, including the cluster it is hosting.
+
+What the measurements showed:
+
+- **The desktop takes the VRAM first.** Windows compositing, Explorer and a
+  browser occupy 1.3-1.6GB of the 4GB card before any model loads.
+- **Two models do not fit.** The orchestrator model and the embedding model were
+  both held resident by Ollama, peaking at 3806MiB used and **157MiB free**. Any
+  transient allocation on top of that fails.
+- **That is what crashed it.** Two `VIDEO_TDR_FAILURE` bugchecks in
+  `nvlddmkm.sys`, the second carrying `STATUS_INSUFFICIENT_RESOURCES` - the
+  driver stopped responding under memory pressure and Windows could not reset it.
+- **Model size is a thermal decision, not just a quality one.** One short call on
+  `qwen3:4b` took the GPU from 55C to 84C; `qwen3:1.7b` reached 64C and finished
+  four times faster in wall-clock. Both emitted valid tool calls.
+- **Partial GPU offload bought nothing.** Capping layers at 12 measured the same
+  throughput as running entirely on CPU while consuming ~800MiB more VRAM.
+
+What changed as a result: `qwen3:1.7b` is the default, context is capped, models
+unload promptly, and the MCP client has explicit timeouts (a wedged dependency
+used to hang the orchestrator forever, since the max-iteration guardrail bounds
+loop count and not call duration).
+
+The honest conclusion is that a 4GB laptop GPU is under-specified for this
+workload, and the documented Claude API fallback - already the plan for harder
+reasoning - is the real answer for anything sustained. Running the Kubernetes
+cluster and local inference simultaneously is also avoidable: the agents run
+fine as host processes while iterating, and the cluster is for demonstrating the
+Kubernetes story.
+
 ## Known gaps
 
 - Schema-invalid tool input is rejected by FastMCP *before* the instrumented
@@ -218,5 +254,5 @@ reasoning steps planned. No cloud GPU rental required, in contrast to an
 inference-serving-style project, which was considered and set aside
 specifically because of the budget constraint.
 
-Verified working on 4GB VRAM (RTX 3050 Ti laptop): `qwen3:4b` for orchestration,
+Verified working on 4GB VRAM (RTX 3050 Ti laptop): `qwen3:1.7b` for orchestration,
 `nomic-embed-text` for embeddings. Web search via `ddgs` needs no API key.
