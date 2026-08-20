@@ -169,7 +169,23 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Results: TODO.
+Latest run — `qwen3:1.7b`, three cases, ~41 s:
+
+| case | required tool called | grounding | completeness | relevance |
+|---|---|---|---|---|
+| mcp-adoption-summary | yes | 5 | 5 | 5 |
+| cached-retrieval | **no** | 5 | 5 | 5 |
+| code-review-basic | yes | 5 | 5 | 5 |
+
+**Known limitation:** `cached-retrieval` fails because the model calls
+`search_web` without trying `retrieve` first, even though the corpus holds
+relevant documents and the system prompt says otherwise. Prompt changes did not
+fix it; `qwen3:4b` follows the ordering rule correctly. That is the cost of the
+smaller default model, and the harness exists to make it visible.
+
+The two signals disagree on that row deliberately: the answer really was
+well-grounded, it just reached the evidence the expensive way. A single blended
+score would have hidden the routing failure.
 
 ## Status
 

@@ -68,10 +68,12 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 #   qwen3:1.7b   3157MiB   64C        3.3s        correct
 #   qwen3:4b     3690MiB   84C        14.5s       correct
 #
-# Both emit valid, correctly-schemad tool calls - which is the capability that
-# actually matters for a four-tool surface with single string arguments. The 4B
-# follows ordering instructions slightly better, and costs 20C and 4x the wall
-# clock for it. On a thin chassis that heat becomes thermal throttling, which
+# Both emit WELL-FORMED tool calls. Where they differ is whether they DECIDE to
+# call one: across the three eval cases the 1.7B skips `retrieve` and searches
+# the web instead, which the 4B gets right. An earlier version of this comment
+# claimed the two were equivalent at tool calling - that came from a single
+# prompt, and the eval harness disproved it. The 4B costs 20C and 4x the wall
+# clock for the difference. On a thin chassis that heat becomes thermal throttling, which
 # slows the whole machine, and sustained load on this GPU has twice ended in a
 # driver reset (VIDEO_TDR_FAILURE).
 #
