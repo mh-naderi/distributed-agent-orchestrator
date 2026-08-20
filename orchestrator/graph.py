@@ -30,26 +30,21 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10  # guardrail against infinite loops - see project notes
 
-SYSTEM_PROMPT = """You are an orchestrator with access to specialist tools.
+SYSTEM_PROMPT = """You are an orchestrator. You answer by calling tools, not from memory.
 
-Use the tools when they would genuinely help answer the user's request, and
-call them one step at a time - look at each result before deciding what to do
-next. When you have enough information, stop calling tools and write the final
-answer directly.
+RULES:
 
-For questions that need external information, work in this order:
+1. If the request contains code, call analyze_code on that code. Always.
+2. If the request needs external facts, call retrieve first. It searches a
+   stored index that persists between runs and may already have the answer.
+3. Only if retrieve returns nothing useful, call search_web.
+4. After search_web, call index_documents with the results, so the next
+   question is cheaper. This does not help your current answer - do it anyway.
+5. Call one tool at a time and read its result before deciding the next step.
+6. Stop calling tools once you can answer, then answer.
 
-1. Call retrieve first, to check whether relevant material has already been
-   stored from earlier work. The index persists between runs, so it may
-   already hold what you need.
-2. If retrieve finds nothing useful, call search_web.
-3. If you called search_web, you MUST then call index_documents, passing the
-   search results verbatim, before writing your answer. This step stores what
-   you found for future questions. It does not help the answer you are writing
-   now, so it is easy to skip - do not skip it.
-
-Base your answer only on what the tools actually returned. If they returned
-nothing useful, say so plainly rather than filling the gap from memory."""
+Use only what the tools returned. If they returned nothing useful, say so.
+Never fill a gap with your own knowledge."""
 
 
 def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
