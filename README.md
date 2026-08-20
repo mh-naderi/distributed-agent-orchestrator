@@ -1,34 +1,22 @@
 # Distributed Agent Orchestrator
 
-A multi-agent system where a LangGraph orchestrator routes tasks across
-specialized agents, each exposed as its own MCP (Model Context Protocol)
-server and deployed as an independent service on Kubernetes, with
-Prometheus/Grafana observability across the whole system.
+A LangGraph orchestrator that routes tasks across specialized agents, each
+exposed as its own MCP (Model Context Protocol) server and deployed as an
+independent Kubernetes service, with Prometheus/Grafana observability.
 
-Built to extend prior work on adaptive distributed systems ([AdapTrain](#))
-into the current agentic-AI tooling landscape.
+Runs entirely locally — no cloud account, no GPU rental, no API keys.
 
 ## Architecture
-
-Three specialized MCP servers, one orchestrator:
 
 | Agent | Tools | State | Deployed as |
 |---|---|---|---|
 | **research** | `search_web` | none | Deployment |
-| **retrieval** | `index_documents`, `retrieve` | persistent vector index | StatefulSet + PVC |
+| **retrieval** | `index_documents`, `retrieve` | vector index | StatefulSet + PVC |
 | **code-analysis** | `analyze_code` | none | Deployment |
 
-The orchestrator (LangGraph) runs a reason -> act -> reason loop: it asks
-an LLM what to do, calls the relevant MCP tool, feeds the result back, and
-repeats until the LLM produces a final answer or a max-iteration guardrail
-is hit.
-
-Each agent runs as its own Kubernetes workload, so it can be restarted,
-scaled, and monitored independently. Prometheus scrapes per-agent metrics
-(latency, call counts, error rates, corpus size) via Kubernetes service
-discovery; Grafana dashboards visualize them.
-
-### System diagram
+The orchestrator runs a reason → act → reason loop: ask the LLM what to do, call
+the MCP tool it picks, feed the result back, repeat until it answers or hits the
+max-iteration guardrail.
 
 ```mermaid
 flowchart TB
@@ -36,30 +24,30 @@ flowchart TB
 
     subgraph HOST["Host machine"]
         direction TB
-        ORCH["Orchestrator — LangGraph<br/>reason → act → reason loop<br/>max-iteration guardrail"]
-        OLLAMA["Ollama :11434<br/>qwen3:1.7b — reasoning<br/>nomic-embed-text — embeddings"]
+        ORCH["Orchestrator — LangGraph<br/>reason → act → reason loop"]
+        OLLAMA["Ollama :11434<br/>qwen3:1.7b · nomic-embed-text"]
     end
 
     subgraph CLUSTER["Kubernetes cluster"]
         direction TB
         subgraph AGENTS["MCP agents — Streamable HTTP on /mcp"]
             direction TB
-            RES["research-agent · Deployment<br/>:8000 mcp · :9100 metrics<br/>search_web"]
-            RET["retrieval-agent · StatefulSet<br/>:8000 mcp · :9101 metrics<br/>index_documents · retrieve"]
-            CODE["code-analysis-agent · Deployment<br/>:8000 mcp · :9102 metrics<br/>analyze_code"]
+            RES["research-agent · Deployment<br/>search_web"]
+            RET["retrieval-agent · StatefulSet<br/>index_documents · retrieve"]
+            CODE["code-analysis-agent · Deployment<br/>analyze_code"]
         end
         PVC[("PersistentVolume<br/>sqlite-vec index")]
-        PROM["Prometheus<br/>kubernetes_sd_configs"]
+        PROM["Prometheus"]
         GRAF["Grafana"]
     end
 
-    WEB(["DuckDuckGo<br/>via ddgs — no API key"])
+    WEB(["DuckDuckGo"])
 
     TASK --> ORCH
     ORCH <-->|"messages + tool schemas"| OLLAMA
     ORCH ==>|"tool calls over MCP"| AGENTS
 
-    RES -->|"web search"| WEB
+    RES --> WEB
     RET -->|"embed"| OLLAMA
     RET <--> PVC
 
@@ -79,96 +67,29 @@ flowchart TB
     class PROM,GRAF obs
 ```
 
-**Reading the diagram.** Solid arrows are request paths, dotted arrows are
-metrics scraping. The amber components are the only **stateful** part of the
-system — the retrieval agent and its volume — which is why that one agent is a
-StatefulSet while the blue agents are Deployments. The blue agents can be scaled
-to any number of replicas; the amber one cannot, because each replica would get
-its own volume and its own divergent corpus.
+Amber is the only stateful part of the system, which is why it's a StatefulSet
+with a volume and why it alone can't be scaled horizontally. Dotted arrows are
+metrics scraping.
 
-Two edges cross the host/cluster boundary and are worth noting: the orchestrator
-reaches the agents from outside the cluster (their Services are `ClusterIP`, so
-this needs `kubectl port-forward`, a `NodePort`, or moving the orchestrator
-in-cluster), and the retrieval agent calls back out to Ollama on the host via
-`host.docker.internal`.
+**[docs/architecture.md](docs/architecture.md)** covers the design decisions —
+why separate MCP servers, why the summarizer agent was cut, and the hardware
+limits that shaped the model and deployment choices.
 
-> This is the deployed topology. All three agents, Prometheus and Grafana run in
-> a local kind cluster; the orchestrator and Ollama run on the host. The agents
-> can also be run directly as host processes for development — see below.
+## Quickstart
 
-## Why multiple small MCP servers instead of one
-
-A single MCP server with all tools would work and is simpler. This
-project deliberately splits into separate services to practice and
-demonstrate independent deployment, independent scaling, and isolated
-failure handling.
-
-The retrieval agent is what makes that split load-bearing rather than
-decorative: it owns an index that must outlive its process, so it's the one
-agent that needs a StatefulSet, a PersistentVolume, and a readiness probe -
-and the one that *can't* be scaled horizontally without a redesign. See
-`docs/architecture.md` for the full writeup, including why an earlier
-summarizer agent was removed for failing this test.
-
-## Design decision: sync vs. async tool execution
-
-All agents execute tool calls synchronously (request in, result out, no
-queue). A code-execution sandbox is the documented stretch-goal candidate
-for an async worker-queue pattern, since running untrusted code is the case
-where decoupling the listener from execution genuinely earns its complexity.
-
-## Local setup (no cloud required)
-
-Runs entirely on your own machine. No cloud account or GPU rental needed.
-Verified on a 4GB-VRAM laptop GPU.
-
-### 1. Install Ollama and pull the models
+**1. Models** (must support tool calling — check `ollama show <model>` for `tools`)
 
 ```bash
-winget install --id Ollama.Ollama --source winget
+ollama pull qwen3:1.7b && ollama pull nomic-embed-text
 ```
+
+**2. Dependencies**
 
 ```bash
-ollama pull qwen3:1.7b
+python -m venv .venv && .venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ```
 
-```bash
-ollama pull nomic-embed-text
-```
-
-The model **must** support tool calling — one that doesn't will answer in prose
-and never emit a tool call, which looks like a broken graph but isn't. Check
-with `ollama show <model>` and look for `tools`.
-
-`qwen3:1.7b` is the default because it was measured, not assumed. Both it and
-`qwen3:4b` emit valid tool calls for this four-tool surface; the difference is
-what they cost on a 4GB laptop GPU:
-
-| model | VRAM | GPU temp | wall time |
-|---|---|---|---|
-| `qwen3:1.7b` | 3157 MiB | **64 °C** | 3.3 s |
-| `qwen3:4b` | 3690 MiB | **84 °C** | 14.5 s |
-
-The 4B follows ordering instructions slightly better and pays 20 °C and 4× the
-wall clock for it. On a thin chassis that heat becomes thermal throttling, which
-slows the whole machine. Set `OLLAMA_MODEL=qwen3:4b` when quality matters more
-than heat.
-
-### 2. Install Python dependencies
-
-```bash
-python -m venv .venv
-```
-
-```bash
-.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-```
-
-### 3. Run the agents
-
-Each in its own terminal. `MCP_PORT` is overridden because all three default
-to 8000 (correct in Kubernetes, where each pod has its own network namespace,
-but colliding on one machine):
+**3. Agents** — one per terminal
 
 ```bash
 MCP_PORT=18000 .venv/Scripts/python.exe agents/research_agent/server.py
@@ -182,30 +103,19 @@ MCP_PORT=18001 .venv/Scripts/python.exe agents/retrieval_agent/server.py
 MCP_PORT=18002 .venv/Scripts/python.exe agents/code_analysis_agent/server.py
 ```
 
-> **Windows note:** the local defaults are ports 18000-18002 rather than
-> 8000-8002 because Windows reserves large TCP ranges for Hyper-V/WSL/Docker,
-> and 8000 commonly falls inside one - binding it fails with WinError 10013
-> even as Administrator. Check yours with
-> `netsh interface ipv4 show excludedportrange protocol=tcp`.
-
-### 4. Run the orchestrator
+**4. Orchestrator**
 
 ```bash
 .venv/Scripts/python.exe -m orchestrator.main
 ```
 
-### Kubernetes
-
-```bash
-winget install --id Kubernetes.kind --source winget
-```
+## Kubernetes
 
 ```bash
 kind create cluster --name agent-orchestrator
 ```
 
-Build each image and load it into the cluster (repeat per agent — the manifests
-use `imagePullPolicy: IfNotPresent`, so the node needs a local copy):
+Build and load each agent image (the manifests use `imagePullPolicy: IfNotPresent`):
 
 ```bash
 docker build -t agent-orchestrator/research-agent:latest agents/research_agent
@@ -219,24 +129,12 @@ kind load docker-image agent-orchestrator/research-agent:latest --name agent-orc
 kubectl apply -f k8s/
 ```
 
-The agents' Services are `ClusterIP`, so the orchestrator — which runs on the
-host — reaches them by port-forwarding onto the same ports its config already
-defaults to:
+Services are `ClusterIP`, so port-forward to reach them from the host — onto the
+same ports the orchestrator config already defaults to:
 
 ```bash
 kubectl port-forward service/retrieval-agent-service 18001:8000
 ```
-
-The retrieval agent reaches Ollama back on the host via `host.docker.internal`.
-That works on Docker Desktop, where a DNS resolver knows the name and the
-network proxy can reach services bound to the host's loopback interface — which
-matters, since Ollama binds `127.0.0.1` by default. It does not generalise to
-kind over native Linux Docker; see the comments in `k8s/retrieval-agent.yaml`.
-
-**Resource note:** the cluster and local inference compete on a 16GB laptop.
-Running kind alongside a 4B model leaves little headroom, and heavy GPU
-contention while Docker Desktop's WSL2 backend is active has been observed to
-destabilise the NVIDIA driver.
 
 ## Tests
 
@@ -244,56 +142,36 @@ destabilise the NVIDIA driver.
 .venv/Scripts/python.exe -m pytest
 ```
 
-Loop logic and vector-store tests run without an LLM or any servers, using
-fakes. Integration tests exercise the real MCP protocol and skip automatically
-when the agents aren't running, so the suite is green on a fresh checkout.
-
-## Evaluation
-
-See `eval/`. A fixed set of representative tasks run through the full
-system, checked against automated signals (required tools actually called,
-keyword matches) and an LLM-judge quality score.
-
-Tool expectations are split into `required_tools` and `allowed_tools`:
-asserting optional tools tests prompt compliance rather than task success,
-and fights every prompt improvement.
-
-Results: TODO, populate after the LLM-judge pass is implemented.
+Loop and vector-store tests use fakes and need nothing running. Integration
+tests exercise the real MCP protocol and skip when the agents are down, so the
+suite is green on a fresh checkout.
 
 ## Observability
 
-Prometheus and Grafana deploy with everything else via `kubectl apply -f k8s/`.
+Prometheus and Grafana deploy with everything else.
 
 ```bash
 kubectl port-forward service/grafana-service 13000:3000
 ```
 
-Grafana comes up at `localhost:13000` with the Prometheus datasource and the
-"Agent Orchestrator" dashboard already provisioned from ConfigMaps — no
-click-through setup, and the dashboard is reviewable in version control rather
-than trapped in a container's database.
+Grafana at `localhost:13000`, datasource and dashboard already provisioned.
+Metrics: `tool_calls_total`, `tool_call_duration_seconds`,
+`retrieval_documents_total`. Discovery is annotation-driven — a new agent opts
+in with `prometheus.io/scrape`, no config edit.
 
-Per-agent metrics on ports 9100-9102: `tool_calls_total{tool_name,status}`,
-`tool_call_duration_seconds` (a Histogram, so p95 is computable rather than just
-an average), and `retrieval_documents_total` — corpus size, because a stateless
-agent's metrics are all flow while a stateful one also has a size.
+## Evaluation
 
-Discovery is **annotation-driven**: Prometheus keeps any pod carrying
-`prometheus.io/scrape: "true"` and scrapes the port named `metrics`. Adding a
-fourth agent means annotating it, not editing the Prometheus config — which is
-what "service discovery" is supposed to buy you.
+```bash
+.venv/Scripts/python.exe -m eval.run_eval
+```
 
-Two details that fail silently if you get them wrong, both covered in
-`k8s/prometheus.yaml`: Prometheus needs **RBAC** to call the Kubernetes API for
-discovery at all, and with `role: pod` it creates one target *per declared
-container port* — so without filtering to the metrics port you get twice the
-targets, half of them permanently red.
+Runs `eval/test_cases.json` through the full system and scores each result on
+automated signals (required tools called, keyword match) plus an LLM judge that
+grades the answer against the tool output it was actually given.
 
-Grafana dashboard screenshots: TODO.
+Results: TODO.
 
 ## Status
 
-Work in progress. Week 1 complete: all three agents serve over Streamable
-HTTP, the orchestrator loop runs end to end against a local model, and the
-retrieval corpus persists across restarts. Build plan and design decisions
-tracked in `docs/architecture.md`.
+Orchestration loop, all three agents, Kubernetes deployment and observability
+are working. Remaining: a first full evaluation run, and a UI.
