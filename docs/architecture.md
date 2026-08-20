@@ -210,7 +210,11 @@ What the measurements showed:
   driver stopped responding under memory pressure and Windows could not reset it.
 - **Model size is a thermal decision, not just a quality one.** One short call on
   `qwen3:4b` took the GPU from 55C to 84C; `qwen3:1.7b` reached 64C and finished
-  four times faster in wall-clock. Both emitted valid tool calls.
+  four times faster in wall-clock. Both emit well-formed tool calls, but the
+  smaller model is less reliable at *deciding* to call one - the evaluation
+  harness later showed it skipping `retrieve` where the 4B does not. Choosing
+  the small model bought thermal headroom and cost tool-selection accuracy;
+  both halves of that trade are measured rather than assumed.
 - **Partial GPU offload bought nothing.** Capping layers at 12 measured the same
   throughput as running entirely on CPU while consuming ~800MiB more VRAM.
 
