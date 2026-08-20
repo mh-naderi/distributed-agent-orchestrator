@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Agent Orchestrator</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; }
+  body { font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  .sub { opacity: .65; font-size: .85rem; margin-bottom: 1.25rem; }
+  form { display: flex; gap: .5rem; margin-bottom: 1.5rem; }
+  input { flex: 1; padding: .55rem .7rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+  button { padding: .55rem 1rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; background: transparent; color: inherit; }
+  button[disabled] { opacity: .5; cursor: default; }
+  .step { border-left: 3px solid var(--line); padding: .4rem 0 .4rem .8rem; margin: .5rem 0; }
+  .step .label { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; opacity: .6; }
+  .step pre { margin: .3rem 0 0; white-space: pre-wrap; word-break: break-word; font-size: .82rem; opacity: .9; }
+  .tool_call  { border-color: #d97706; }
+  .tool_result{ border-color: #2563eb; }
+  .answer     { border-color: #16a34a; }
+  .error      { border-color: #dc2626; }
+  .answer pre { font-size: .95rem; opacity: 1; }
+</style>
+
+<h1>Agent Orchestrator</h1>
+<div class="sub">Watch the reason → act → reason loop as it runs.</div>
+
+<form id="f">
+  <input id="task" placeholder="Ask something…" value="What is a Kubernetes StatefulSet?" autocomplete="off">
+  <button id="go">Run</button>
+</form>
+
+<div id="out"></div>
+
+<script>
+  const out = document.getElementById('out');
+  const go = document.getElementById('go');
+  let source;
+
+  function step(kind, label, body) {
+    const el = document.createElement('div');
+    el.className = 'step ' + kind;
+    el.innerHTML = '<div class="label"></div><pre></pre>';
+    el.querySelector('.label').textContent = label;
+    el.querySelector('pre').textContent = body;
+    out.appendChild(el);
+    el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  }
+
+  function finish() {
+    if (source) source.close();
+    go.disabled = false;
+    go.textContent = 'Run';
+  }
+
+  document.getElementById('f').onsubmit = (e) => {
+    e.preventDefault();
+    out.innerHTML = '';
+    go.disabled = true;
+    go.textContent = 'Running…';
+
+    source = new EventSource('/stream?task=' + encodeURIComponent(document.getElementById('task').value));
+
+    source.addEventListener('tools', (e) =>
+      step('tools', 'tools discovered', JSON.parse(e.data).tools.join(', ')));
+
+    source.addEventListener('tool_call', (e) => {
+      const d = JSON.parse(e.data);
+      step('tool_call', `iteration ${d.iteration} · calling ${d.name}`, JSON.stringify(d.arguments));
+    });
+
+    source.addEventListener('tool_result', (e) => {
+      const d = JSON.parse(e.data);
+      step('tool_result', `${d.name} returned`, d.output);
+    });
+
+    source.addEventListener('answer', (e) =>
+      step('answer', 'answer', JSON.parse(e.data).content));
+
+    source.addEventListener('run_error', (e) =>
+      step('error', 'error', JSON.parse(e.data).message));
+
+    source.addEventListener('done', finish);
+
+    // Fires on transport-level failure too, so only report if nothing arrived.
+    source.onerror = () => { if (!out.children.length) step('error', 'error', 'connection failed'); finish(); };
+  };
+</script>
