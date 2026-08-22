@@ -70,6 +70,12 @@ spec:
             # Higher than the agents because this process holds the LangGraph
             # runtime plus a separate MCP client session per agent. It runs no
             # model itself - inference is the host's job - so it stays modest.
+            #
+            # MEASURED after a full run with a real tool call: 81MiB, against
+            # 52-56MiB for the agents. So the 128Mi request is about right and
+            # the 512Mi limit is deliberate headroom, not a fitted number -
+            # tool results are held in the message list for the whole run, so
+            # peak scales with how much text the tools return.
             requests: { memory: "128Mi", cpu: "100m" }
             limits: { memory: "512Mi" }
           livenessProbe:
