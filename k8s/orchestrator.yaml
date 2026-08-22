@@ -49,19 +49,21 @@ spec:
             - name: CODE_ANALYSIS_AGENT_URL
               value: "http://code-analysis-agent-service:8000/mcp"
 
-            # Ollama stays on the host - the GPU is not in the cluster. See the
-            # long note in retrieval-agent.yaml for why host.docker.internal
-            # resolves here and why it does not generalise beyond Docker
-            # Desktop.
+            # Ollama stays on the host - the GPU is not in the cluster. See
+            # the long note in retrieval-agent.yaml for why
+            # host.docker.internal resolves here and why it does not
+            # generalise beyond Docker Desktop.
             #
-            # Port 11500, not Ollama's default 11434: that default currently
-            # falls inside a Windows reserved range and Ollama cannot bind its
-            # own port. Start it with
+            # 11434 is Ollama's own default. It is not always bindable on this
+            # host: Windows reserves large TCP blocks and REDRAWS THEM ON
+            # BOOT, and 11434 has fallen inside one before (11359-11458), at
+            # which point Ollama cannot bind its own port and has to be moved:
             #     OLLAMA_HOST=127.0.0.1:11500 ollama serve
-            # If the reserved ranges have moved since (they are redrawn on
-            # boot), this value and that command must change together.
+            # and this value changed to match. Verified free and serving on
+            # 11434 as of the run that deployed this. Check yours with:
+            #     netsh interface ipv4 show excludedportrange protocol=tcp
             - name: OLLAMA_HOST
-              value: "http://host.docker.internal:11500"
+              value: "http://host.docker.internal:11434"
             - name: OLLAMA_MODEL
               value: "qwen3:1.7b"
           resources:
