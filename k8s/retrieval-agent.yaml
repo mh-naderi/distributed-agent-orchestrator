@@ -108,8 +108,18 @@ spec:
             # because Ollama is not listening on it. Fixing that means either
             # binding Ollama to 0.0.0.0 (which exposes it to the network) or
             # adding a hostAliases entry pointing at the node gateway.
+            #
+            # Port 11500, not Ollama's default 11434: that default currently
+            # falls inside a Windows reserved range, so Ollama cannot bind its
+            # own port and must be started with
+            #     OLLAMA_HOST=127.0.0.1:11500 ollama serve
+            # The ranges are redrawn on boot, so this value and that command
+            # have to move together. Left at 11434 this agent still starts and
+            # still passes its probes - it only fails when something asks it
+            # to embed, which is the worst shape of failure to leave lying
+            # around.
             - name: OLLAMA_HOST
-              value: "http://host.docker.internal:11434"
+              value: "http://host.docker.internal:11500"
             - name: EMBEDDING_MODEL
               value: "nomic-embed-text"
             - name: RETRIEVAL_DB_PATH
