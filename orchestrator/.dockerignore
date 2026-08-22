@@ -1,0 +1,6 @@
+# Keeps build-cache churn down: a .pyc rewrite would otherwise invalidate the
+# COPY layer on every run.
+__pycache__/
+*.pyc
+Dockerfile
+.dockerignore

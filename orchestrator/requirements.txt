@@ -3,3 +3,13 @@ mcp[cli]>=1.27,<2
 anthropic>=0.40.0
 ollama>=0.5.0  # >=0.5 for tool_name on tool-role messages
 prometheus-client>=0.20.0
+
+# The web layer. These arrive transitively via mcp[cli] and api.py leans on
+# that deliberately - it is why Starlette was chosen over FastAPI. That
+# reasoning holds for a dev checkout and breaks for an image, where uvicorn is
+# the container's ENTRYPOINT: an upstream resolver change that drops one of
+# these would turn a working service into a crash-loop with no local signal.
+# Depending explicitly on what you actually import costs nothing here.
+starlette>=1.6,<2
+uvicorn>=0.34
+sse-starlette>=3.4,<4
