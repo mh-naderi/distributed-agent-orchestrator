@@ -111,11 +111,16 @@ MCP_PORT=18002 .venv/Scripts/python.exe agents/code_analysis_agent/server.py
 
 ## Kubernetes
 
+The cluster must be created with the config file — it publishes the node port
+that serves the UI, and Docker can only publish a container's ports at creation
+time, so this cannot be added to an existing cluster:
+
 ```bash
-kind create cluster --name agent-orchestrator
+kind create cluster --name agent-orchestrator --config k8s/kind-cluster.yaml
 ```
 
-Build and load each agent image (the manifests use `imagePullPolicy: IfNotPresent`):
+Build and load each image — three agents plus the orchestrator (the manifests
+use `imagePullPolicy: IfNotPresent`):
 
 ```bash
 docker build -t agent-orchestrator/research-agent:latest agents/research_agent
@@ -129,12 +134,20 @@ kind load docker-image agent-orchestrator/research-agent:latest --name agent-orc
 kubectl apply -f k8s/
 ```
 
-Services are `ClusterIP`, so port-forward to reach them from the host — onto the
-same ports the orchestrator config already defaults to:
+The orchestrator runs **inside** the cluster and reaches the agents by their
+Service DNS names, so the UI needs no tunnel:
+
+    http://localhost:18080
+
+Everything else is `ClusterIP`. Port-forward only what you need — Grafana,
+Prometheus, or an agent you want to drive from the host:
 
 ```bash
 kubectl port-forward service/retrieval-agent-service 18001:8000
 ```
+
+Ollama stays on the host; pods reach it via `host.docker.internal`. See
+`docs/RUNBOOK.md` for the full sequence and the environment traps.
 
 ## Tests
 
@@ -189,5 +202,10 @@ score would have hidden the routing failure.
 
 ## Status
 
-Orchestration loop, all three agents, Kubernetes deployment and observability
-are working. Remaining: a first full evaluation run, and a UI.
+Orchestration loop, all three agents, Kubernetes deployment, observability and
+the evaluation harness are working and verified.
+
+The streaming UI is containerised and has manifests, and is verified running as
+a host process. The in-cluster deployment of it has not yet been run end to end
+— see `docs/RUNBOOK.md` for how, and the Kubernetes section above for what it
+should do.
