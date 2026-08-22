@@ -1,5 +1,13 @@
 # Cluster topology for kind.
 #
+# NOT IN k8s/, deliberately. Everything in that directory is applied with a
+# single `kubectl apply -f k8s/`, and this file is not a Kubernetes resource -
+# it is consumed by the kind CLI before an API server exists. Left in k8s/ it
+# makes that command fail with
+#     no matches for kind "Cluster" in version "kind.x-k8s.io/v1alpha4"
+# after correctly applying everything else, which is a confusing way to end a
+# successful deploy.
+#
 # WHY THIS FILE EXISTS AT ALL. Every Service in this project is ClusterIP,
 # which is only reachable from inside the cluster - so reaching anything from
 # the host has meant `kubectl port-forward`, one tunnel per service, each

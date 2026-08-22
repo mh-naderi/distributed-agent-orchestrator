@@ -46,7 +46,7 @@ or the streaming UI at http://localhost:18080 :
 Create the cluster **with the config file**:
 
 ```bash
-kind create cluster --name agent-orchestrator --config k8s/kind-cluster.yaml
+kind create cluster --name agent-orchestrator --config kind-cluster.yaml
 ```
 
 The config publishes node port 30080 to host port 18080, which is what makes

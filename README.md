@@ -116,7 +116,7 @@ that serves the UI, and Docker can only publish a container's ports at creation
 time, so this cannot be added to an existing cluster:
 
 ```bash
-kind create cluster --name agent-orchestrator --config k8s/kind-cluster.yaml
+kind create cluster --name agent-orchestrator --config kind-cluster.yaml
 ```
 
 Build and load each image — three agents plus the orchestrator (the manifests
