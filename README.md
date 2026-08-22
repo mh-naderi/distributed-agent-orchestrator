@@ -205,7 +205,7 @@ score would have hidden the routing failure.
 Orchestration loop, all three agents, Kubernetes deployment, observability and
 the evaluation harness are working and verified.
 
-The streaming UI is containerised and has manifests, and is verified running as
-a host process. The in-cluster deployment of it has not yet been run end to end
-— see `docs/RUNBOOK.md` for how, and the Kubernetes section above for what it
-should do.
+The streaming UI runs in the cluster too, verified end to end: reachable on
+`localhost:18080` with no port-forward, resolving the agents by Service DNS,
+and answering from the retrieval corpus with the full `tools` -> `tool_call`
+-> `tool_result` -> `answer` -> `done` sequence.
