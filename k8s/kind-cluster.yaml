@@ -1,0 +1,36 @@
+# Cluster topology for kind.
+#
+# WHY THIS FILE EXISTS AT ALL. Every Service in this project is ClusterIP,
+# which is only reachable from inside the cluster - so reaching anything from
+# the host has meant `kubectl port-forward`, one tunnel per service, each
+# holding a terminal and dying when its pod is replaced. That is acceptable for
+# Grafana, which a human opens occasionally. It is not acceptable for the
+# orchestrator UI, whose whole point is to be the front door.
+#
+# A NodePort alone does not fix it. kind runs the "node" as a Docker container,
+# so a NodePort opens a port on THAT container, not on Windows. The port has to
+# be published from the node container to the host, and Docker can only publish
+# ports when a container is created - which means kind can only honour this at
+# CLUSTER CREATION time. Adding it to a running cluster is not possible; the
+# cluster has to be deleted and recreated.
+#
+# Create the cluster with:
+#     kind create cluster --name agent-orchestrator --config k8s/kind-cluster.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Node 30080 (the orchestrator Service's nodePort) -> host 18080, the
+      # same port the host-process workflow already serves the UI on, so the
+      # bookmark does not change between the two ways of running this.
+      #
+      # hostPort is a real Windows port and therefore subject to the reservation
+      # trap documented in docs/RUNBOOK.md. If cluster creation fails to bind
+      # it, 18080 has fallen inside a reserved range - check with
+      #     netsh interface ipv4 show excludedportrange protocol=tcp
+      # and change both this hostPort and the URL you open.
+      - containerPort: 30080
+        hostPort: 18080
+        protocol: TCP
+        listenAddress: "127.0.0.1"  # loopback only; do not expose to the LAN

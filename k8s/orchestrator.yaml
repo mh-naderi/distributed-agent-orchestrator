@@ -1,0 +1,116 @@
+# The orchestrator, running INSIDE the cluster rather than reaching into it.
+#
+# What changes by moving it here: the three `kubectl port-forward` tunnels the
+# host process needed are gone. The orchestrator now resolves the agents by
+# their Service DNS names on the cluster network, which is the arrangement the
+# ClusterIP Services existed for all along and the first time it is actually
+# exercised.
+#
+# What does NOT change: any application code. orchestrator/config.py reads every
+# endpoint from the environment with local defaults, so deploying is setting env
+# vars on a Deployment - which is exactly what that file's docstring promised.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+spec:
+  # One replica for memory headroom on a 16GB laptop that is also running
+  # Docker's VM and local inference - not for correctness. Each SSE stream is a
+  # single HTTP request served start-to-finish by one pod and no state is shared
+  # between runs, so this would scale horizontally without session affinity.
+  replicas: 1
+  selector:
+    matchLabels: { app: orchestrator }
+  template:
+    metadata:
+      labels: { app: orchestrator }
+      # Deliberately NOT annotated with prometheus.io/scrape. The agents export
+      # /metrics on a second port; this service does not export anything yet.
+      # Annotating it would add a permanently-down target to Prometheus, which
+      # makes the dashboard lie about the health of the system. Add the
+      # annotation in the same change that adds the endpoint.
+    spec:
+      containers:
+        - name: orchestrator
+          image: agent-orchestrator/orchestrator:latest
+          imagePullPolicy: IfNotPresent  # so kind uses the locally-built image
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # The agents, by Service DNS. The /mcp path is part of the address:
+            # Streamable HTTP puts requests and streamed responses on one
+            # endpoint, so it belongs in the URL, not the client.
+            - name: RESEARCH_AGENT_URL
+              value: "http://research-agent-service:8000/mcp"
+            - name: RETRIEVAL_AGENT_URL
+              value: "http://retrieval-agent-service:8000/mcp"
+            - name: CODE_ANALYSIS_AGENT_URL
+              value: "http://code-analysis-agent-service:8000/mcp"
+
+            # Ollama stays on the host - the GPU is not in the cluster. See the
+            # long note in retrieval-agent.yaml for why host.docker.internal
+            # resolves here and why it does not generalise beyond Docker
+            # Desktop.
+            #
+            # Port 11500, not Ollama's default 11434: that default currently
+            # falls inside a Windows reserved range and Ollama cannot bind its
+            # own port. Start it with
+            #     OLLAMA_HOST=127.0.0.1:11500 ollama serve
+            # If the reserved ranges have moved since (they are redrawn on
+            # boot), this value and that command must change together.
+            - name: OLLAMA_HOST
+              value: "http://host.docker.internal:11500"
+            - name: OLLAMA_MODEL
+              value: "qwen3:1.7b"
+          resources:
+            # Higher than the agents because this process holds the LangGraph
+            # runtime plus a separate MCP client session per agent. It runs no
+            # model itself - inference is the host's job - so it stays modest.
+            requests: { memory: "128Mi", cpu: "100m" }
+            limits: { memory: "512Mi" }
+          livenessProbe:
+            # httpGet, not tcpSocket. docs/RUNBOOK.md records the trap: a TCP
+            # connect proves only that something accepted the socket. Here we
+            # can do better than the agents, because /health is a real endpoint
+            # that exercises the ASGI app.
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            # /health reports this process's own liveness and its configuration.
+            # It deliberately does NOT call the agents, so readiness does not
+            # cascade: a wedged research agent must not pull the UI out of
+            # service when the other two tools still work and the page can still
+            # report the failure.
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-service
+  labels:
+    app: orchestrator
+spec:
+  # NodePort, unlike every other Service here, because this one is the front
+  # door for a human. Paired with the extraPortMappings in k8s/kind-cluster.yaml
+  # it makes the UI reachable at http://localhost:18080 with no port-forward -
+  # and therefore nothing to silently break when a pod is replaced.
+  #
+  # The nodePort number is NOT arbitrary: it must match the containerPort in
+  # that kind config, or the tunnel from the host lands on a closed port.
+  type: NodePort
+  selector: { app: orchestrator }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080
