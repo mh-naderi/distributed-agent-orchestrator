@@ -109,7 +109,7 @@ data:
           "title": "Error rate by tool",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "targets": [
-            { "expr": "sum by (tool_name) (rate(tool_calls_total{status=\"error\"}[5m]))", "legendFormat": "{{tool_name}}" }
+            { "expr": "sum by (tool_name) (rate(tool_calls_total{status=\"error\"}[5m])) or vector(0)", "legendFormat": "{{tool_name}}" }
           ]
         },
         {
