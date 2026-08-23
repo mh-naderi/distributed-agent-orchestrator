@@ -24,6 +24,7 @@ Run it:
     .venv/Scripts/python.exe -m uvicorn orchestrator.api:app --port 18080
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -36,7 +37,7 @@ from prometheus_client import start_http_server
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from orchestrator.config import AGENT_URLS, OLLAMA_MODEL
+from orchestrator.config import AGENT_URLS, MCP_DISCOVERY_TTL, OLLAMA_MODEL
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
@@ -60,9 +61,98 @@ async def index(request):
 
 async def health(request):
     """Liveness plus enough configuration to make a failed run diagnosable."""
+    # Deliberately does NOT call the agents: readiness must not cascade, or a
+    # wedged agent pulls the UI out of service when the other tools still
+    # work. The discovery figures are the cheap substitute - they say what the
+    # last discovery FOUND, and how long ago, without touching anything now.
+    age = _registry_cache.age
     return JSONResponse(
-        {"status": "ok", "model": OLLAMA_MODEL, "agents": AGENT_URLS}
+        {
+            "status": "ok",
+            "model": OLLAMA_MODEL,
+            "agents": AGENT_URLS,
+            "discovery": {
+                "tools": len(_registry_cache.tools),
+                "age_seconds": None if age is None else round(age, 1),
+                "ttl_seconds": MCP_DISCOVERY_TTL,
+            },
+        }
     )
+
+
+class _RegistryCache:
+    """
+    One discovery result, shared by every request until it goes stale.
+
+    Discovery is three MCP connect-and-handshake round trips and it used to
+    run on every request, before any work started - so every run paid for it
+    and the first event was correspondingly late.
+
+    Three rules make caching safe here:
+
+    1. A TTL, so a tool added to an agent becomes visible on its own rather
+       than requiring a restart.
+    2. An EMPTY result is never stored. Discovery tolerates unreachable
+       agents by design - it logs and skips them - so a blip can legitimately
+       return nothing, and caching that would convert a moment of downtime
+       into a full TTL of it.
+    3. A lock, so a burst of concurrent requests performs one discovery
+       rather than one each. The re-check inside the lock matters: whoever
+       waited for it usually finds the work already done.
+    """
+
+    def __init__(self, ttl: float = MCP_DISCOVERY_TTL):
+        self._ttl = ttl
+        self._lock = asyncio.Lock()
+        self._registry: MCPToolRegistry | None = None
+        self._fetched_at = 0.0
+
+    def _fresh(self) -> bool:
+        return (
+            self._registry is not None
+            and bool(self._registry.tools)
+            and (time.monotonic() - self._fetched_at) < self._ttl
+        )
+
+    @property
+    def age(self) -> float | None:
+        """Seconds since the cached result was fetched, or None if empty."""
+        if self._registry is None:
+            return None
+        return time.monotonic() - self._fetched_at
+
+    @property
+    def tools(self) -> list[dict]:
+        """Whatever the last successful discovery found; empty if none yet."""
+        return self._registry.tools if self._registry is not None else []
+
+    def clear(self) -> None:
+        self._registry = None
+        self._fetched_at = 0.0
+
+    async def get(self) -> MCPToolRegistry:
+        if self._fresh():
+            return self._registry
+
+        async with self._lock:
+            if self._fresh():
+                return self._registry
+
+            registry = MCPToolRegistry()
+            await registry.discover()
+            TOOLS_DISCOVERED.observe(len(registry.tools))
+
+            if not registry.tools:
+                # Deliberately not stored, so the next request retries.
+                DISCOVERY_FAILURES.inc()
+                return registry
+
+            self._registry = registry
+            self._fetched_at = time.monotonic()
+            return registry
+
+
+_registry_cache = _RegistryCache()
 
 
 def _sse(event: str, **payload) -> dict:
@@ -94,19 +184,15 @@ async def _run(task: str):
     iterations = None
 
     try:
-        registry = MCPToolRegistry()
         try:
-            await registry.discover()
+            registry = await _registry_cache.get()
         except Exception as exc:
             DISCOVERY_FAILURES.inc()
             outcome = "no_tools"
             yield _sse("run_error", message=f"tool discovery failed: {exc}")
             return
 
-        TOOLS_DISCOVERED.observe(len(registry.tools))
-
         if not registry.tools:
-            DISCOVERY_FAILURES.inc()
             outcome = "no_tools"
             yield _sse(
                 "run_error",

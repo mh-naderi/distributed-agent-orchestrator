@@ -51,6 +51,20 @@ AGENT_URLS = {
 MCP_HTTP_TIMEOUT = float(os.environ.get("MCP_HTTP_TIMEOUT", "30"))
 MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "120"))
 
+# How long a discovery result stays usable before it is fetched again.
+#
+# Discovery is three MCP connect-and-handshake round trips, and it used to run
+# on EVERY request, before any work started. Caching it trades staleness for
+# latency: a tool added to an agent stays invisible until the TTL lapses.
+# Sixty seconds is short enough that a restarted agent reappears on its own
+# without anyone intervening, and long enough that a burst of requests pays
+# for discovery once.
+#
+# An EMPTY result is never cached, whatever this is set to - see
+# orchestrator/api.py. Freezing "no agents are up" for a minute would turn a
+# blip into an outage.
+MCP_DISCOVERY_TTL = float(os.environ.get("MCP_DISCOVERY_TTL", "60"))
+
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------

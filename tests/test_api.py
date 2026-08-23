@@ -38,6 +38,21 @@ async def collect(task: str) -> list[tuple[str, dict]]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def clean_registry_cache():
+    """
+    Discovery is cached process-wide, so it leaks between tests.
+
+    Without this a test that wires an empty registry still sees whatever a
+    previous test discovered. autouse because forgetting it in one test
+    produces a failure in a DIFFERENT test, which is a miserable thing to
+    debug.
+    """
+    api._registry_cache.clear()
+    yield
+    api._registry_cache.clear()
+
+
 @pytest.fixture
 def wire(monkeypatch):
     """Point _run at a fake registry and a scripted provider."""
@@ -197,3 +212,92 @@ def test_importing_the_app_does_not_bind_the_metrics_port():
         )
     finally:
         sock.close()
+
+
+class CountingRegistry(DiscoverableRegistry):
+    """Records how many times discovery actually ran."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.discoveries = 0
+
+    async def discover(self):
+        self.discoveries += 1
+        return self.tools
+
+
+async def test_discovery_is_not_repeated_for_every_run(monkeypatch):
+    """The point of the cache: three MCP handshakes once, not once per run."""
+    registry = CountingRegistry()
+    monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
+    monkeypatch.setattr(
+        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+    )
+
+    for _ in range(3):
+        monkeypatch.setattr(
+            api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+        )
+        await collect("anything")
+
+    assert registry.discoveries == 1
+
+
+async def test_an_empty_discovery_is_never_cached(monkeypatch):
+    """
+    The rule that keeps a blip from becoming an outage.
+
+    MCPToolRegistry tolerates unreachable agents by logging and skipping them,
+    so "no tools" is a legitimate transient result. Caching it would keep the
+    system down for a full TTL after the agents came back.
+    """
+    registry = CountingRegistry(tools=[])
+    monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
+    monkeypatch.setattr(api, "get_provider", lambda: ScriptedProvider([]))
+
+    await collect("first")
+    await collect("second")
+
+    # Retried rather than served from a cached failure.
+    assert registry.discoveries == 2
+
+
+async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
+    """A failed discovery must not wedge the process until someone restarts it."""
+    registry = CountingRegistry(tools=[])
+    monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
+    monkeypatch.setattr(api, "get_provider", lambda: ScriptedProvider([]))
+
+    events = await collect("while down")
+    assert [name for name, _ in events] == ["run_error"]
+
+    # The agents come back.
+    registry.tools = DiscoverableRegistry().tools
+    monkeypatch.setattr(
+        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="back")])
+    )
+
+    events = await collect("after recovery")
+    assert [name for name, _ in events] == ["tools", "answer", "done"]
+
+
+async def test_concurrent_first_requests_discover_once(monkeypatch):
+    """The lock: a burst on a cold cache must not stampede into N discoveries."""
+    import asyncio
+
+    registry = CountingRegistry()
+
+    async def slow_discover():
+        registry.discoveries += 1
+        await asyncio.sleep(0.05)  # long enough for the others to pile up
+        return registry.tools
+
+    registry.discover = slow_discover
+    monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
+    monkeypatch.setattr(
+        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+    )
+
+    await asyncio.gather(*(collect(f"task {i}") for i in range(5)))
+
+    assert registry.discoveries == 1
