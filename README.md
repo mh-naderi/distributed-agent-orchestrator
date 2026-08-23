@@ -168,9 +168,27 @@ kubectl port-forward service/grafana-service 13000:3000
 ```
 
 Grafana at `localhost:13000`, datasource and dashboard already provisioned.
-Metrics: `tool_calls_total`, `tool_call_duration_seconds`,
-`retrieval_documents_total`. Discovery is annotation-driven — a new agent opts
-in with `prometheus.io/scrape`, no config edit.
+Discovery is annotation-driven — a new component opts in with
+`prometheus.io/scrape`, no config edit. The annotated port must be **named**
+`metrics`; Prometheus selects targets by port name, so a metrics endpoint on a
+port named anything else is annotated and then silently never scraped.
+
+From the agents, at the tool boundary:
+
+- `tool_calls_total{tool_name,status,agent}`
+- `tool_call_duration_seconds` (histogram, so p95 is computable)
+- `retrieval_documents_total` — corpus size, the one number that should
+  survive a pod restart
+
+From the orchestrator, about the loop rather than individual tools:
+
+- `orchestrator_runs_total{outcome}` — `answered`, `truncated`, `failed`,
+  `no_tools`
+- `orchestrator_run_duration_seconds`
+- `orchestrator_run_iterations` — runs clustering near the max-iteration
+  guardrail mean the loop is regularly running out of road, which no per-tool
+  metric would reveal because each call looks fine
+- `orchestrator_tools_discovered`, `orchestrator_discovery_failures_total`
 
 ## Evaluation
 
