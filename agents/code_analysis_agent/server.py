@@ -9,8 +9,9 @@ MVP: stays synchronous like the other two agents. The worker-queue
 version is a documented stretch goal, not required for the core build -
 see docs/architecture.md.
 
-TODO(week 1, day 3-4): wire analyze_code() to real static analysis +
-LLM reasoning.
+TODO: wire analyze_code() to real static analysis (ast/pyflakes) + LLM
+reasoning. Until then the tool raises NotImplementedError on purpose - see
+CodeAnalysisService.run for why a failing tool beats a reassuring one.
 TODO(stretch goal, week 2+): convert this agent specifically to the
 async worker pattern and document the before/after in the README.
 """
@@ -30,8 +31,34 @@ mcp = FastMCP("code-analysis-agent", host="0.0.0.0", port=MCP_PORT)
 
 class CodeAnalysisService:
     def run(self, code: str) -> str:
-        # STUB: replace with static analysis + LLM review.
-        return f"[stub analysis] Reviewed {len(code)} chars of code, no issues found (stub)."
+        """
+        Not implemented yet - and it FAILS rather than returning a pleasant
+        placeholder, which is the whole point.
+
+        This previously returned
+            "[stub analysis] Reviewed N chars of code, no issues found (stub)."
+        A well-formed success carrying no information is undetectable
+        downstream: the orchestrating model has been told to use only what the
+        tools returned, so it faithfully relayed the stub and reported
+        "No issues were found in the provided code." for
+            def divide(a, b): return a / b
+        - an unhandled ZeroDivisionError. The model behaved correctly; the tool
+        lied to it.
+
+        This is the same failure that got the research agent's stub deleted -
+        see 'Grounding, and why the stubs had to go' in docs/architecture.md.
+        Raising makes the gap visible in three places at once: the model sees
+        an error and can say it could not analyse the code, the loop stays
+        alive because MCPToolRegistry.call feeds tool errors back as text
+        rather than raising, and tool_calls_total{status="error"} finally
+        becomes reachable for this agent.
+        """
+        raise NotImplementedError(
+            "analyze_code is not implemented: this agent performs no static "
+            "analysis yet. Nothing was checked. Do not conclude that the code "
+            "is correct or free of problems - report that analysis was "
+            "unavailable."
+        )
 
 
 code_analysis_service = CodeAnalysisService()
