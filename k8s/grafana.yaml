@@ -114,6 +114,27 @@ data:
         },
         {
           "type": "timeseries",
+          "title": "Orchestrator runs by outcome",
+          "description": "The agents report tool calls; only the orchestrator knows how a RUN ended. A rising truncated line means the loop is hitting its guardrail, which no per-tool metric shows - each call looks fine.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "targets": [
+            { "expr": "sum by (outcome) (rate(orchestrator_runs_total[5m]))", "legendFormat": "{{outcome}}" }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Iterations per run (p95)",
+          "description": "How many reason/act cycles a run needs. Approaching MAX_ITERATIONS is the early warning that prompts or the model are degrading.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(orchestrator_run_iterations_bucket[5m])))",
+              "legendFormat": "p95 iterations"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
           "title": "Calls by agent",
           "description": "Per-agent attribution comes from the relabel rules in the Prometheus config, not from the agents themselves.",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
