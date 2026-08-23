@@ -111,6 +111,35 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
 
         return {"messages": results}
 
+    async def note_truncation(state: AgentState) -> dict:
+        """
+        Terminal node for the guardrail path.
+
+        Without this the loop stopped correctly and said nothing about it. The
+        last message on the truncated path is the model's unanswered tool-call
+        request, so content was empty: arun() returned '', and the streaming
+        API emitted tool_call events followed by done with no answer event at
+        all - the UI simply stopped mid-run. The guardrail exists for a real
+        failure mode, and its firing was the one thing it never reported.
+
+        A router cannot do this: should_continue returns a string and cannot
+        add to state. Hence a node.
+        """
+        return {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"Stopped after {MAX_ITERATIONS} iterations without reaching "
+                        "an answer. This is not a final answer: the loop was still "
+                        "requesting tools when it hit the max-iteration guardrail, "
+                        "and the last requested tool calls were not executed."
+                    ),
+                    "truncated": True,
+                }
+            ]
+        }
+
     def should_continue(state: AgentState) -> str:
         """
         Conditional routing. Reads the LLM's last decision and the iteration
@@ -122,7 +151,7 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         """
         if state["iterations"] >= MAX_ITERATIONS:
             logger.warning("hit MAX_ITERATIONS (%d), stopping", MAX_ITERATIONS)
-            return "end"
+            return "truncated"
 
         if state["messages"][-1].get("tool_calls"):
             return "continue"
@@ -132,13 +161,15 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
     graph = StateGraph(AgentState)
     graph.add_node("reason", call_llm)
     graph.add_node("act", call_mcp_tool)
+    graph.add_node("truncate", note_truncation)
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges(
         "reason",
         should_continue,
-        {"continue": "act", "end": END},
+        {"continue": "act", "truncated": "truncate", "end": END},
     )
     graph.add_edge("act", "reason")
+    graph.add_edge("truncate", END)
 
     return graph.compile()

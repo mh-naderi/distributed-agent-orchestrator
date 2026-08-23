@@ -118,6 +118,35 @@ async def test_guardrail_stops_a_model_that_never_finishes():
     assert len(registry.calls) == MAX_ITERATIONS - 1
 
 
+async def test_guardrail_leaves_a_usable_answer_rather_than_silence():
+    """
+    Stopping is not enough - the caller has to be TOLD it was cut short.
+
+    This is the gap the test above missed. It asserted the loop halted, which
+    it did, but never looked at what came back. On the truncated path the last
+    message was the model's unanswered tool-call request, so content was empty:
+    arun() returned '', and the streaming API sent tool_call events then done
+    with no answer event - the page stopped mid-run with no explanation.
+    """
+
+    class NeverStops:
+        async def chat(self, messages, tools):
+            return LLMResponse(
+                content="", tool_calls=[ToolCall("x", "search_web", {"query": "again"})]
+            )
+
+    final = await build_graph(FakeRegistry(), NeverStops()).ainvoke(initial_state())
+    last = final["messages"][-1]
+
+    # Not a dangling tool-call request.
+    assert not last.get("tool_calls")
+    # Something a human or the eval harness can actually read.
+    assert last["content"].strip()
+    # Flagged, so callers can tell a stop notice from a real answer.
+    assert last.get("truncated") is True
+    assert str(MAX_ITERATIONS) in last["content"]
+
+
 async def test_tool_error_is_fed_back_rather_than_raised():
     """A failed tool should keep the loop alive - the model can react to it."""
 

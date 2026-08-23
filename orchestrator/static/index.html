@@ -17,6 +17,7 @@
   .tool_result{ border-color: #2563eb; }
   .answer     { border-color: #16a34a; }
   .error      { border-color: #dc2626; }
+  .truncated  { border-color: #d97706; background: #fffbeb; }
   .answer pre { font-size: .95rem; opacity: 1; }
 </style>
 
@@ -74,6 +75,9 @@
 
     source.addEventListener('answer', (e) =>
       step('answer', 'answer', JSON.parse(e.data).content));
+
+    source.addEventListener('truncated', (e) =>
+      step('truncated', 'stopped early', JSON.parse(e.data).content));
 
     source.addEventListener('run_error', (e) =>
       step('error', 'error', JSON.parse(e.data).message));

@@ -117,6 +117,14 @@ async def _run(task: str):
                     else:
                         yield _sse("answer", content=message.get("content", ""))
 
+                elif node == "truncate":
+                    # A separate event, not an answer. The run ended because
+                    # the guardrail fired, and calling that an "answer" would
+                    # present a stop notice as a result. Previously this path
+                    # emitted nothing at all and the page just stopped.
+                    message = messages[-1] if messages else {}
+                    yield _sse("truncated", content=message.get("content", ""))
+
                 elif node == "act":
                     for message in messages:
                         yield _sse(
