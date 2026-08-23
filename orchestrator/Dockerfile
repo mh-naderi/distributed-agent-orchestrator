@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app/orchestrator/
 
-EXPOSE 8080
+EXPOSE 8080 9103
 
 # --host 0.0.0.0 is not optional. uvicorn defaults to 127.0.0.1, which inside a
 # container means the container's own loopback - the process starts, the port

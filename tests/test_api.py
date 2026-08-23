@@ -14,6 +14,7 @@ monkeypatch can replace them - which is what the fixtures below do.
 import json
 
 import pytest
+from prometheus_client import REGISTRY
 
 from orchestrator.graph import MAX_ITERATIONS
 from orchestrator.llm import LLMResponse, ToolCall
@@ -113,3 +114,86 @@ async def test_discovery_failure_is_reported_and_stops_the_run(wire):
 
     assert [name for name, _ in events] == ["run_error"]
     assert "agent servers" in dict(events)["run_error"]["message"]
+
+
+def runs(outcome: str) -> float:
+    """Current value of orchestrator_runs_total for one outcome."""
+    value = REGISTRY.get_sample_value(
+        "orchestrator_runs_total", {"outcome": outcome}
+    )
+    return value or 0.0
+
+
+async def test_a_normal_run_is_counted_as_answered(wire):
+    provider = ScriptedProvider([LLMResponse(content="done")])
+    wire(provider)
+
+    before = runs("answered")
+    await collect("anything")
+
+    assert runs("answered") == before + 1
+
+
+async def test_a_truncated_run_is_counted_separately(wire):
+    """
+    The point of the outcome label: a run that hit the guardrail must not be
+    indistinguishable from one that answered. Runs piling up under
+    "truncated" is the signal that the loop is regularly running out of road.
+    """
+
+    class NeverStops:
+        async def chat(self, messages, tools):
+            return LLMResponse(
+                content="", tool_calls=[ToolCall("x", "search_web", {"query": "again"})]
+            )
+
+    wire(NeverStops())
+
+    before_truncated = runs("truncated")
+    before_answered = runs("answered")
+    await collect("loop forever")
+
+    assert runs("truncated") == before_truncated + 1
+    assert runs("answered") == before_answered
+
+
+def test_metrics_are_exported_in_the_exposition_format():
+    """
+    Exercises generate_latest directly rather than an HTTP route.
+
+    Metrics are served by prometheus_client on its own port at app startup,
+    not as a Starlette route - see orchestrator/metrics.py for why. Binding
+    that port in a test would be a side effect for no extra coverage: what
+    matters is that the series exist and are named as the dashboard expects.
+    """
+    from prometheus_client import generate_latest
+
+    exposition = generate_latest().decode()
+
+    # Present even at zero, or a panel built on it reads "No data" until the
+    # first run rather than showing a legitimate zero.
+    assert "orchestrator_runs_total" in exposition
+    assert "orchestrator_run_duration_seconds" in exposition
+    assert "orchestrator_run_iterations" in exposition
+
+
+def test_importing_the_app_does_not_bind_the_metrics_port():
+    """
+    The reason the metrics server lives in a lifespan hook, not at import.
+
+    Importing orchestrator.api must stay free of side effects, or every test
+    that touches it competes for a real port - and on this machine ports are
+    a scarce, moving target (see docs/RUNBOOK.md).
+    """
+    import socket
+
+    from orchestrator.metrics import METRICS_PORT
+
+    sock = socket.socket()
+    try:
+        sock.settimeout(0.3)
+        assert sock.connect_ex(("127.0.0.1", METRICS_PORT)) != 0, (
+            f"something is listening on {METRICS_PORT} merely from importing the app"
+        )
+    finally:
+        sock.close()

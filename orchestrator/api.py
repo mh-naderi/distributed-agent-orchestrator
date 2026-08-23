@@ -26,10 +26,13 @@ Run it:
 
 import json
 import logging
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
+from prometheus_client import start_http_server
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
@@ -37,6 +40,14 @@ from orchestrator.config import AGENT_URLS, OLLAMA_MODEL
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
+from orchestrator.metrics import (
+    DISCOVERY_FAILURES,
+    METRICS_PORT,
+    RUN_DURATION,
+    RUN_ITERATIONS,
+    RUNS,
+    TOOLS_DISCOVERED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,69 +86,94 @@ async def _run(task: str):
     domain events here means the graph itself stays unaware that anything is
     watching - no streaming concerns leak into the loop.
     """
-    registry = MCPToolRegistry()
-    try:
-        await registry.discover()
-    except Exception as exc:
-        yield _sse("run_error", message=f"tool discovery failed: {exc}")
-        return
-
-    if not registry.tools:
-        yield _sse(
-            "run_error",
-            message="No MCP tools discovered - are the agent servers running?",
-        )
-        return
-
-    yield _sse("tools", tools=[t["name"] for t in registry.tools])
-
-    state = {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task},
-        ],
-        "iterations": 0,
-    }
+    started = time.perf_counter()
+    # Pessimistic default: anything that escapes without setting this - an
+    # exception, or the client disconnecting mid-run and closing the
+    # generator - is counted as a failure rather than silently not counted.
+    outcome = "failed"
+    iterations = None
 
     try:
-        async for chunk in build_graph(registry, get_provider()).astream(state):
-            for node, update in chunk.items():
-                messages = update.get("messages") or []
+        registry = MCPToolRegistry()
+        try:
+            await registry.discover()
+        except Exception as exc:
+            DISCOVERY_FAILURES.inc()
+            outcome = "no_tools"
+            yield _sse("run_error", message=f"tool discovery failed: {exc}")
+            return
 
-                if node == "reason":
-                    message = messages[-1] if messages else {}
-                    if message.get("tool_calls"):
-                        for call in message["tool_calls"]:
+        TOOLS_DISCOVERED.observe(len(registry.tools))
+
+        if not registry.tools:
+            DISCOVERY_FAILURES.inc()
+            outcome = "no_tools"
+            yield _sse(
+                "run_error",
+                message="No MCP tools discovered - are the agent servers running?",
+            )
+            return
+
+        yield _sse("tools", tools=[t["name"] for t in registry.tools])
+
+        state = {
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": task},
+            ],
+            "iterations": 0,
+        }
+
+        try:
+            async for chunk in build_graph(registry, get_provider()).astream(state):
+                for node, update in chunk.items():
+                    messages = update.get("messages") or []
+                    if update.get("iterations") is not None:
+                        iterations = update["iterations"]
+
+                    if node == "reason":
+                        message = messages[-1] if messages else {}
+                        if message.get("tool_calls"):
+                            for call in message["tool_calls"]:
+                                yield _sse(
+                                    "tool_call",
+                                    iteration=update.get("iterations"),
+                                    name=call["name"],
+                                    arguments=call["arguments"],
+                                )
+                        else:
+                            outcome = "answered"
+                            yield _sse("answer", content=message.get("content", ""))
+
+                    elif node == "truncate":
+                        # A separate event, not an answer. The run ended because
+                        # the guardrail fired, and calling that an "answer" would
+                        # present a stop notice as a result. Previously this path
+                        # emitted nothing at all and the page just stopped.
+                        outcome = "truncated"
+                        message = messages[-1] if messages else {}
+                        yield _sse("truncated", content=message.get("content", ""))
+
+                    elif node == "act":
+                        for message in messages:
                             yield _sse(
-                                "tool_call",
-                                iteration=update.get("iterations"),
-                                name=call["name"],
-                                arguments=call["arguments"],
+                                "tool_result",
+                                name=message.get("name", "?"),
+                                output=message.get("content", ""),
                             )
-                    else:
-                        yield _sse("answer", content=message.get("content", ""))
+        except Exception as exc:
+            logger.exception("run failed")
+            yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
+            return
 
-                elif node == "truncate":
-                    # A separate event, not an answer. The run ended because
-                    # the guardrail fired, and calling that an "answer" would
-                    # present a stop notice as a result. Previously this path
-                    # emitted nothing at all and the page just stopped.
-                    message = messages[-1] if messages else {}
-                    yield _sse("truncated", content=message.get("content", ""))
-
-                elif node == "act":
-                    for message in messages:
-                        yield _sse(
-                            "tool_result",
-                            name=message.get("name", "?"),
-                            output=message.get("content", ""),
-                        )
-    except Exception as exc:
-        logger.exception("run failed")
-        yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
-        return
-
-    yield _sse("done")
+        yield _sse("done")
+    finally:
+        # A generator's finally runs on close too, so a client that navigates
+        # away mid-run is still counted rather than vanishing from the totals.
+        RUNS.labels(outcome=outcome).inc()
+        RUN_DURATION.observe(time.perf_counter() - started)
+        if iterations is not None:
+            RUN_ITERATIONS.observe(iterations)
 
 
 async def stream(request):
@@ -147,10 +183,31 @@ async def stream(request):
     return EventSourceResponse(_run(task))
 
 
+@asynccontextmanager
+async def _lifespan(app):
+    """
+    Start the Prometheus endpoint on its own port, once, at app startup.
+
+    A lifespan hook rather than module-level code, so that importing this
+    module - which the tests do - does not bind a port as a side effect.
+    (Starlette's older on_startup= list is gone in 1.x; lifespan is the
+    replacement, and the tests caught the difference.)
+
+    start_http_server runs a small WSGI server on a daemon thread. That is
+    the same mechanism all three agents use, and the thread is what keeps
+    scrapes answerable while the event loop is busy inside a long inference
+    call.
+    """
+    start_http_server(METRICS_PORT)
+    logger.info("metrics listening on :%d", METRICS_PORT)
+    yield
+
+
 app = Starlette(
     routes=[
         Route("/", index),
         Route("/health", health),
         Route("/stream", stream),
-    ]
+    ],
+    lifespan=_lifespan,
 )

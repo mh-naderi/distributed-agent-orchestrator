@@ -25,11 +25,17 @@ spec:
   template:
     metadata:
       labels: { app: orchestrator }
-      # Deliberately NOT annotated with prometheus.io/scrape. The agents export
-      # /metrics on a second port; this service does not export anything yet.
-      # Annotating it would add a permanently-down target to Prometheus, which
-      # makes the dashboard lie about the health of the system. Add the
-      # annotation in the same change that adds the endpoint.
+      annotations:
+        # Now annotated, in the same change that added the endpoint - the
+        # condition the previous comment here set for turning this on.
+        #
+        # Same shape as the agents: a side port named "metrics". That name is
+        # load-bearing - prometheus.yaml keeps only targets whose container
+        # port is named "metrics", so a metrics route on the port named
+        # "http" would be annotated and then silently never scraped.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9103"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: orchestrator
@@ -38,6 +44,8 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: metrics
+              containerPort: 9103
           env:
             # The agents, by Service DNS. The /mcp path is part of the address:
             # Streamable HTTP puts requests and streamed responses on one
@@ -122,3 +130,9 @@ spec:
       port: 8080
       targetPort: http
       nodePort: 30080
+    # Deliberately no nodePort: metrics stay reachable inside the cluster
+    # (Prometheus scrapes the pod directly) and are NOT published to the host
+    # the way the UI port is.
+    - name: metrics
+      port: 9103
+      targetPort: metrics
