@@ -6,6 +6,7 @@
 # agent's store and exercise the research agent's search service.
 sqlite-vec>=0.1.9
 ddgs>=9.0
+pyflakes>=3.2  # the code-analysis agent's static checks
 
 pytest>=8.0
 pytest-asyncio>=0.24

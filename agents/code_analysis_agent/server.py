@@ -9,15 +9,18 @@ MVP: stays synchronous like the other two agents. The worker-queue
 version is a documented stretch goal, not required for the core build -
 see docs/architecture.md.
 
-TODO: wire analyze_code() to real static analysis (ast/pyflakes) + LLM
-reasoning. Until then the tool raises NotImplementedError on purpose - see
-CodeAnalysisService.run for why a failing tool beats a reassuring one.
+analyze_code runs real static analysis - see analysis.py, which also records
+why it deliberately reports less than it could. An LLM review pass on top of
+the mechanical findings remains a possible extension, but it would make this
+agent depend on Ollama the way the retrieval agent does, and static analysis
+is the fast half.
 TODO(stretch goal, week 2+): convert this agent specifically to the
 async worker pattern and document the before/after in the README.
 """
 
 import os
 import time
+from analysis import report
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -30,44 +33,29 @@ mcp = FastMCP("code-analysis-agent", host="0.0.0.0", port=MCP_PORT)
 
 
 class CodeAnalysisService:
+    """
+    Thin seam over analysis.report, kept so server.py matches the shape of the
+    other agents: protocol wiring here, logic in its own module.
+    """
+
     def run(self, code: str) -> str:
-        """
-        Not implemented yet - and it FAILS rather than returning a pleasant
-        placeholder, which is the whole point.
-
-        This previously returned
-            "[stub analysis] Reviewed N chars of code, no issues found (stub)."
-        A well-formed success carrying no information is undetectable
-        downstream: the orchestrating model has been told to use only what the
-        tools returned, so it faithfully relayed the stub and reported
-        "No issues were found in the provided code." for
-            def divide(a, b): return a / b
-        - an unhandled ZeroDivisionError. The model behaved correctly; the tool
-        lied to it.
-
-        This is the same failure that got the research agent's stub deleted -
-        see 'Grounding, and why the stubs had to go' in docs/architecture.md.
-        Raising makes the gap visible in three places at once: the model sees
-        an error and can say it could not analyse the code, the loop stays
-        alive because MCPToolRegistry.call feeds tool errors back as text
-        rather than raising, and tool_calls_total{status="error"} finally
-        becomes reachable for this agent.
-        """
-        raise NotImplementedError(
-            "analyze_code is not implemented: this agent performs no static "
-            "analysis yet. Nothing was checked. Do not conclude that the code "
-            "is correct or free of problems - report that analysis was "
-            "unavailable."
-        )
-
+        return report(code)
 
 code_analysis_service = CodeAnalysisService()
 
 
 @mcp.tool()
 def analyze_code(code: str) -> str:
-    """Analyze the given code snippet for issues, style problems, or
-    potential bugs."""
+    """Run static analysis on a Python snippet.
+
+    Reports syntax errors, undefined or unused names, mutable default
+    arguments, bare or silenced excepts, == comparisons against None/True/
+    False, division by an unguarded parameter, and unreachable code.
+
+    Does NOT execute the code and does not check logic, performance or
+    security. A clean result means these checks found nothing; it is not
+    evidence that the code is correct.
+    """
     start = time.time()
     try:
         result = code_analysis_service.run(code)
