@@ -12,7 +12,10 @@ Architecture:
 - agents/retrieval_agent - MCP server over a sqlite-vec index. The only
   stateful service: deployed as a StatefulSet with a PersistentVolume, and the
   one agent that cannot be scaled horizontally without a redesign.
-- agents/code_analysis_agent - MCP server, code review tool (still stubbed)
+- agents/code_analysis_agent - MCP server, static analysis over Python
+  snippets (ast + pyflakes). Reports facts about the code and states what it
+  did not check, because a clean result that implies correctness is how this
+  tool misled the model when it was a stub.
 - orchestrator/ - LangGraph reason-act loop that calls the agents over MCP,
   with a max-iteration guardrail and explicit MCP timeouts
 - k8s/ - manifests per agent, plus the observability stack: Prometheus with
