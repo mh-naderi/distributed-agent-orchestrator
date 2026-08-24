@@ -148,3 +148,36 @@ async def test_plain_answer_produces_no_tool_calls(monkeypatch):
 
     assert response.content == "Final answer."
     assert response.tool_calls == []
+
+
+def test_a_trailing_think_token_is_stripped_from_tool_arguments():
+    """
+    Qwen3's template appends " /no_think" to the last user message when
+    thinking is explicitly disabled, which this project does by default. The
+    model reads it as ordinary text and copies it into arguments when quoting
+    the request back.
+
+    Observed against the running system: asked to review
+        def divide(a, b): return a / b
+    the model called analyze_code with the token attached, and the analyser
+    reported an undefined name 'no_think'. Invisible while that tool was a
+    stub that ignored its input.
+    """
+    from orchestrator.llm import _strip_think_token
+
+    assert (
+        _strip_think_token("def divide(a, b): return a / b /no_think")
+        == "def divide(a, b): return a / b"
+    )
+    assert _strip_think_token("x = 1 /think") == "x = 1"
+
+
+def test_stripping_only_touches_a_trailing_token():
+    """Code that legitimately mentions the word must survive untouched."""
+    from orchestrator.llm import _strip_think_token
+
+    assert _strip_think_token("no_think = 1") == "no_think = 1"
+    assert _strip_think_token("a /think b") == "a /think b"
+    # Non-strings pass through - arguments are not always text.
+    assert _strip_think_token(42) == 42
+    assert _strip_think_token(None) is None

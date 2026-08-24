@@ -59,6 +59,38 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
+# Qwen3's chat template appends " /think" or " /no_think" to the LAST USER
+# MESSAGE when thinking is explicitly set - which this project does, by
+# default, for the timing reasons in config.py. The token is a control
+# instruction for the template, but the model sees it as ordinary text at the
+# end of the user's words, and copies it into tool arguments when it quotes
+# the request back.
+#
+# Observed, not theorised: asked to review
+#     def divide(a, b): return a / b
+# the model called analyze_code with
+#     {"code": "def divide(a, b): return a / b /no_think"}
+# and the analyser duly reported an undefined name 'no_think'. It went
+# unnoticed for as long as that tool was a stub that ignored its input.
+#
+# Stripped here because this module is the boundary: everything above it deals
+# in provider-neutral shapes, and a template artifact from one vendor's model
+# has no business crossing it. Only a TRAILING token is removed, so code or
+# prose that legitimately contains the word is untouched.
+_THINK_TOKENS = ("/no_think", "/think")
+
+
+def _strip_think_token(value):
+    """Remove a trailing template control token from a tool argument."""
+    if not isinstance(value, str):
+        return value
+    cleaned = value.rstrip()
+    for token in _THINK_TOKENS:
+        if cleaned.endswith(token):
+            return cleaned[: -len(token)].rstrip()
+    return value
+
+
 class LLMProvider(Protocol):
     async def chat(self, messages: list[dict], tools: list[dict]) -> LLMResponse: ...
 
@@ -186,7 +218,7 @@ class OllamaProvider:
                     # handle to match a result back to its call.
                     id=uuid.uuid4().hex[:8],
                     name=call.function.name,
-                    arguments=dict(arguments),
+                    arguments={k: _strip_think_token(v) for k, v in arguments.items()},
                 )
             )
 
