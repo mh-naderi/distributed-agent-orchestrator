@@ -14,6 +14,8 @@ Start the agents first:
 The retrieval agent also needs Ollama running with the embedding model pulled.
 """
 
+import uuid
+
 import pytest
 
 from orchestrator.mcp_client import MCPToolRegistry
@@ -52,16 +54,22 @@ async def test_index_then_retrieve_round_trip(registry):
     """
     Exercises both retrieval tools across the network, and incidentally proves
     dispatch works - both tools live on the retrieval agent, search_web doesn't.
+
+    The marker is unique per run. It used to be a fixed string, which quietly
+    relied on the store accepting duplicates: once the store began skipping
+    text it already held, the second run of this test indexed 0 documents and
+    failed. A round-trip test should not depend on the corpus being empty of
+    its own fixture.
     """
-    marker = "Xylophone Quarks Institute studies imaginary particles"
+    marker = f"Xylophone Quarks Institute studies imaginary particles {uuid.uuid4().hex[:8]}"
 
     indexed = await registry.call(
         "index_documents", {"texts": [marker], "source": "integration-test"}
     )
     assert "Indexed 1 document" in indexed
 
-    found = await registry.call("retrieve", {"query": "xylophone quarks", "k": 3})
-    assert "Xylophone Quarks Institute" in found
+    found = await registry.call("retrieve", {"query": marker, "k": 3})
+    assert marker in found
     assert "integration-test" in found
 
 
@@ -97,9 +105,19 @@ async def test_search_results_exclude_advertisements(registry):
 
 
 async def test_calls_are_routed_to_the_owning_agent(registry):
-    """Dispatch is a lookup in the ownership map built during discovery."""
+    """
+    Dispatch is a lookup in the ownership map built during discovery.
+
+    This asserted on "[stub analysis]" until analyze_code became real static
+    analysis. It kept passing locally because these tests skip without agents
+    running, so the staleness only surfaced once they were reachable again.
+    """
     result = await registry.call("analyze_code", {"code": "def add(a, b): return a + b"})
-    assert "[stub analysis]" in result
+
+    # Clean code, so the report is the no-findings one - which must still say
+    # what it checked rather than implying the code is correct.
+    assert "No issues found by the checks that were run" in result
+    assert "NOT evidence that the code is correct" in result
 
 
 async def test_unknown_tool_returns_an_error_string(registry):
