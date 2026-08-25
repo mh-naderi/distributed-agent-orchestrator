@@ -200,42 +200,40 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, three cases, ~48 s:
+Latest run — `qwen3:1.7b`, three cases, ~38 s:
 
 | case | required tool called | grounding | completeness | relevance |
 |---|---|---|---|---|
-| mcp-adoption-summary | yes | 4 | 5 | 5 |
-| cached-retrieval | yes | 5 | **1** | 3 |
+| mcp-adoption-summary | yes | 5 | 5 | 5 |
+| cached-retrieval | yes | 5 | 5 | 5 |
 | code-review-basic | yes | 5 | 5 | 5 |
 
+Straight fives are not a brag — two of these numbers moved because the harness
+was fixed, not because the system got smarter. Both fixes are worth recording,
+since each was a case of a measurement quietly measuring the wrong thing.
+
+**`cached-retrieval` was testing a side effect.** It carried a note reading
+"Run after mcp-adoption-summary", which nothing enforced. It could only find
+MCP content in the corpus if that earlier case had chosen to call
+`index_documents` — and the small default model skips indexing, correctly from
+its point of view, because indexing helps the *next* run and does nothing for
+the answer in progress. So the case scored completeness 1 against a corpus that
+genuinely held nothing about MCP, and looked like a retrieval failure. Cases now
+declare `seed_documents`, which the harness indexes through the MCP tool before
+the case runs. Completeness 1 → 5, with the answer drawn from the seeded text.
+
 **A previously documented failure did not reproduce.** Earlier results recorded
-`cached-retrieval` failing its required-tool check because the model reached for
-`search_web` instead of `retrieve`, and attributed that to the smaller default
-model. Re-measured, it calls `retrieve` first in 4 of 4 runs. What changed is
-not established — the honest statement is that the old conclusion does not hold,
-not that something fixed it.
+`cached-retrieval` calling `search_web` instead of `retrieve` and blamed the
+smaller model. Re-measured, it calls `retrieve` first in 4 of 4 runs. What
+changed is not established, and this says so rather than inventing a cause.
 
-**The real limitation is one level up, and it is an eval design flaw.**
-`cached-retrieval` asks "What is the Model Context Protocol?" expecting the
-corpus to already hold the answer. It only would if `mcp-adoption-summary` had
-called `index_documents` after searching — and that model skips indexing,
-because indexing helps the *next* run and does nothing for the answer in
-progress (see Known gaps in `docs/architecture.md`). So the case carries an
-implicit dependency on an earlier case's optional side effect. It scores
-completeness 1 not because retrieval routed wrongly, but because the corpus
-genuinely contains nothing about MCP.
-
-That row is now the interesting one: grounding 5, completeness 1. The agent
-searched the index, found nothing, and said so — which the rubric correctly
-scores as well-grounded, because admitting ignorance is grounded.
-
-**Grounding is not truth.** Worth stating plainly, because this harness has
-already been fooled by it. The judge scores whether every claim in the answer is
-supported by the tool output. It cannot tell that the tool output was itself
-false. When `analyze_code` was a stub returning "no issues found", this table
-published `code-review-basic` at grounding 5/5 — a perfectly grounded answer
-built on a fabrication. The score was right by its own definition and the
-conclusion drawn from it was wrong. That row now reflects real static analysis.
+**Grounding is not truth.** Worth stating plainly, because this harness was
+fooled by it. The judge scores whether every claim in the answer is supported by
+the tool output. It cannot tell that the tool output was itself false. While
+`analyze_code` was a stub returning "no issues found", this table published
+`code-review-basic` at grounding 5/5 — a perfectly grounded answer built on a
+fabrication. The score was right by its own definition; the conclusion drawn
+from it was wrong. That row now reflects real static analysis.
 
 Keeping the two signals separate is what makes any of this visible. A single
 blended score would have hidden both the routing question and the empty corpus.
