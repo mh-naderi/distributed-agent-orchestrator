@@ -2,22 +2,44 @@
   {
     "id": "mcp-adoption-summary",
     "task": "Research the current state of MCP adoption and summarize it in two paragraphs.",
-    "required_tools": ["search_web"],
-    "allowed_tools": ["retrieve", "index_documents"],
-    "must_contain": ["MCP", "protocol"]
+    "required_tools": [
+      "search_web"
+    ],
+    "allowed_tools": [
+      "retrieve",
+      "index_documents"
+    ],
+    "must_contain": [
+      "MCP",
+      "protocol"
+    ]
   },
   {
     "id": "cached-retrieval",
     "task": "What is the Model Context Protocol?",
-    "required_tools": ["retrieve"],
-    "allowed_tools": ["search_web", "index_documents"],
-    "must_contain": ["protocol"],
-    "note": "Run after mcp-adoption-summary. Exercises the persistent corpus: the answer should come from the index rather than a fresh search."
+    "required_tools": [
+      "retrieve"
+    ],
+    "allowed_tools": [
+      "search_web",
+      "index_documents"
+    ],
+    "must_contain": [
+      "protocol"
+    ],
+    "seed_documents": [
+      "The Model Context Protocol (MCP) is an open standard that lets an application expose tools, resources and prompts to a language model over a uniform interface, so a client can discover what a server offers at runtime rather than having it compiled in.",
+      "An MCP server declares each tool with a name, a description and a JSON Schema for its arguments. That schema is what a model's tool-calling API needs, which is how discovery and tool calling join up."
+    ],
+    "seed_source": "eval-fixture",
+    "why": "Seeded rather than relying on an earlier case having indexed something. This case previously carried a note saying 'Run after mcp-adoption-summary', which nothing enforced: it depended on that case choosing to call index_documents, and the small default model skips indexing because it helps the next run and not the answer in progress. So the corpus stayed empty of MCP content and the case measured that instead of retrieval."
   },
   {
     "id": "code-review-basic",
     "task": "Analyze this Python function for issues: def add(a, b): return a+b",
-    "required_tools": ["analyze_code"],
+    "required_tools": [
+      "analyze_code"
+    ],
     "allowed_tools": [],
     "must_contain": []
   }

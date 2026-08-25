@@ -23,6 +23,7 @@ serving the model in orchestrator/config.py:
     python -m eval.run_eval
 """
 
+import asyncio
 import json
 import statistics
 import time
@@ -31,6 +32,7 @@ from pathlib import Path
 
 from eval.judge import judge
 from orchestrator.main import run_traced
+from orchestrator.mcp_client import MCPToolRegistry
 
 RESULTS_PATH = Path("eval/results.json")
 
@@ -64,7 +66,58 @@ def check_automated_signals(case: dict, output: str, tools_called: list[str]) ->
     }
 
 
+def seed_corpus(case: dict) -> str | None:
+    """
+    Put a case's fixture documents into the index before it runs.
+
+    WHY THIS EXISTS. cached-retrieval used to carry a note reading "Run after
+    mcp-adoption-summary", and nothing enforced it. The dependency was real but
+    invisible: the case could only find MCP content in the corpus if the
+    earlier case had chosen to call index_documents, and the small default
+    model skips indexing - correctly, from its point of view, since indexing
+    helps the NEXT run and does nothing for the answer in progress.
+
+    So the case scored a completeness of 1 against an empty corpus and looked
+    like a retrieval failure. It was measuring whether an unrelated case had
+    had a side effect.
+
+    Seeding through the MCP tool rather than writing to the store directly:
+    the harness has no filesystem access to the agent's volume in Kubernetes,
+    and going through the real path means the fixture is embedded by the same
+    model the query will be embedded with. A fixture indexed any other way
+    would not be a fair test of retrieval.
+
+    Idempotent because the store now skips text it already holds, so repeated
+    eval runs do not accumulate copies of the fixture - which would crowd the
+    results they are meant to support.
+    """
+    documents = case.get("seed_documents")
+    if not documents:
+        return None
+
+    async def _seed():
+        registry = MCPToolRegistry()
+        await registry.discover()
+        if "index_documents" not in {t["name"] for t in registry.tools}:
+            raise RuntimeError(
+                "cannot seed: the retrieval agent is not reachable"
+            )
+        return await registry.call(
+            "index_documents",
+            {"texts": documents, "source": case.get("seed_source", "eval-fixture")},
+        )
+
+    return asyncio.run(_seed())
+
+
 def run_case(case: dict) -> dict:
+    # Seeding is NOT inside the timing window - it is fixture setup, not work
+    # the system under test performed.
+    try:
+        seeded = seed_corpus(case)
+    except Exception as exc:
+        return {"id": case["id"], "error": f"seeding failed: {type(exc).__name__}: {exc}"}
+
     started = time.time()
     try:
         trace = run_traced(case["task"])
@@ -76,6 +129,7 @@ def run_case(case: dict) -> dict:
 
     return {
         "id": case["id"],
+        "seeded": seeded,
         "seconds": round(time.time() - started, 1),
         "iterations": trace.iterations,
         "tools_called": trace.tools_called,
