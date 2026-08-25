@@ -200,23 +200,45 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, three cases, ~41 s:
+Latest run — `qwen3:1.7b`, three cases, ~48 s:
 
 | case | required tool called | grounding | completeness | relevance |
 |---|---|---|---|---|
-| mcp-adoption-summary | yes | 5 | 5 | 5 |
-| cached-retrieval | **no** | 5 | 5 | 5 |
+| mcp-adoption-summary | yes | 4 | 5 | 5 |
+| cached-retrieval | yes | 5 | **1** | 3 |
 | code-review-basic | yes | 5 | 5 | 5 |
 
-**Known limitation:** `cached-retrieval` fails because the model calls
-`search_web` without trying `retrieve` first, even though the corpus holds
-relevant documents and the system prompt says otherwise. Prompt changes did not
-fix it; `qwen3:4b` follows the ordering rule correctly. That is the cost of the
-smaller default model, and the harness exists to make it visible.
+**A previously documented failure did not reproduce.** Earlier results recorded
+`cached-retrieval` failing its required-tool check because the model reached for
+`search_web` instead of `retrieve`, and attributed that to the smaller default
+model. Re-measured, it calls `retrieve` first in 4 of 4 runs. What changed is
+not established — the honest statement is that the old conclusion does not hold,
+not that something fixed it.
 
-The two signals disagree on that row deliberately: the answer really was
-well-grounded, it just reached the evidence the expensive way. A single blended
-score would have hidden the routing failure.
+**The real limitation is one level up, and it is an eval design flaw.**
+`cached-retrieval` asks "What is the Model Context Protocol?" expecting the
+corpus to already hold the answer. It only would if `mcp-adoption-summary` had
+called `index_documents` after searching — and that model skips indexing,
+because indexing helps the *next* run and does nothing for the answer in
+progress (see Known gaps in `docs/architecture.md`). So the case carries an
+implicit dependency on an earlier case's optional side effect. It scores
+completeness 1 not because retrieval routed wrongly, but because the corpus
+genuinely contains nothing about MCP.
+
+That row is now the interesting one: grounding 5, completeness 1. The agent
+searched the index, found nothing, and said so — which the rubric correctly
+scores as well-grounded, because admitting ignorance is grounded.
+
+**Grounding is not truth.** Worth stating plainly, because this harness has
+already been fooled by it. The judge scores whether every claim in the answer is
+supported by the tool output. It cannot tell that the tool output was itself
+false. When `analyze_code` was a stub returning "no issues found", this table
+published `code-review-basic` at grounding 5/5 — a perfectly grounded answer
+built on a fabrication. The score was right by its own definition and the
+conclusion drawn from it was wrong. That row now reflects real static analysis.
+
+Keeping the two signals separate is what makes any of this visible. A single
+blended score would have hidden both the routing question and the empty corpus.
 
 ## Status
 
