@@ -144,15 +144,69 @@ class VectorStore:
             """
         )
 
+    # SQLite's default limit on host parameters is 999, so the IN clause is
+    # asked in batches rather than assuming the caller sends a small list.
+    _PARAM_BATCH = 500
+
+    def _new_texts_only(self, texts: list[str]) -> list[str]:
+        """
+        Drop texts already in the corpus, and duplicates within the batch.
+
+        WHY THIS EXISTS. index() used to INSERT unconditionally, so indexing
+        the same content twice stored it twice. That is not merely untidy:
+        retrieve() returns the k NEAREST rows, and identical rows are equally
+        near, so duplicates crowd each other out of the results. Observed in
+        this corpus, which accumulated three copies of one test document - a
+        top-2 retrieval came back with the same text as both [1] and [2],
+        spending the entire result set on one document.
+
+        Filtering BEFORE embedding is deliberate: the round trip to the
+        embedding model dominates index(), so re-indexing known content now
+        costs no inference at all.
+
+        Exact text match rather than a fuzzy or semantic one. Near-duplicates
+        are a genuinely harder problem, and a store whose rule for what it
+        keeps is "identical string" is one you can reason about.
+        """
+        seen: set[str] = set()
+        candidates = []
+        for text in texts:
+            if text not in seen:
+                seen.add(text)
+                candidates.append(text)
+
+        existing: set[str] = set()
+        with self._connect() as db:
+            for start in range(0, len(candidates), self._PARAM_BATCH):
+                batch = candidates[start : start + self._PARAM_BATCH]
+                placeholders = ",".join("?" * len(batch))
+                rows = db.execute(
+                    f"SELECT text FROM documents WHERE text IN ({placeholders})",
+                    batch,
+                )
+                existing.update(row[0] for row in rows)
+
+        return [t for t in candidates if t not in existing]
+
     def index(self, texts: list[str], source: str) -> int:
         """
-        Embed and store documents. Returns how many were stored.
+        Embed and store documents. Returns how many were NEWLY stored.
+
+        Text already in the corpus is skipped - see _new_texts_only. The
+        return value is therefore a count of what changed, not of what was
+        submitted, which is what a caller checking "did this do anything"
+        needs.
 
         Embedding happens in one batched call rather than one call per document -
         the round trip to Ollama dominates, so batching is most of the speed.
         """
         texts = [t.strip() for t in texts if t and t.strip()]
         if not texts:
+            return 0
+
+        texts = self._new_texts_only(texts)
+        if not texts:
+            logger.info("nothing to index from %s - all already present", source)
             return 0
 
         embeddings = self._embed(texts)

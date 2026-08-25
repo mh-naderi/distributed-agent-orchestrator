@@ -111,6 +111,57 @@ def test_embedder_returning_wrong_count_is_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_indexing_the_same_text_twice_stores_it_once(store):
+    """
+    Duplicates are not merely untidy - they crowd the results.
+
+    retrieve() returns the k nearest rows, and identical rows are equally
+    near, so a duplicated document can occupy the whole result set. This
+    corpus accumulated three copies of one test document and a top-2
+    retrieval came back with the same text twice.
+    """
+    assert store.index(["MCP is a protocol for tool calling"], "first") == 1
+    assert store.index(["MCP is a protocol for tool calling"], "second") == 0
+
+    results = store.retrieve("protocol", k=5)
+    assert len(results) == 1
+
+
+def test_duplicates_within_one_batch_are_collapsed(store):
+    """Counted, not set-compared - a set cannot tell one copy from three."""
+    stored = store.index(["same text", "same text", "different text"], "batch")
+
+    assert stored == 2
+    assert len(store.retrieve("text", k=10)) == 2
+
+
+def test_a_duplicate_no_longer_displaces_a_real_result(store):
+    """The failure this fixes, stated as a retrieval outcome."""
+    store.index(["MCP is a protocol", "MCP is a protocol"], "dupes")
+    store.index(["Kubernetes schedules pods"], "other")
+
+    texts = [r["text"] for r in store.retrieve("protocol", k=2)]
+
+    # Two slots, two DIFFERENT documents - previously both went to the dupe.
+    assert len(texts) == len(set(texts)) == 2
+
+
+def test_known_text_is_not_re_embedded(tmp_path):
+    """Filtering happens before the embed call, which is what index() spends."""
+    calls = []
+
+    def counting_embed(texts):
+        calls.append(list(texts))
+        return fake_embed(texts)
+
+    store = VectorStore(counting_embed, db_path=str(tmp_path / "t.db"))
+    store.index(["MCP is a protocol"], "first")
+    store.index(["MCP is a protocol"], "again")
+
+    # One embed for the first index, none for the repeat.
+    assert len(calls) == 1
+
+
 def test_chunk_splits_search_results_into_one_document_each():
     """
     The research agent joins its results with blank lines, so passing its output
