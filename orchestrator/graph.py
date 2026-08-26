@@ -70,6 +70,14 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         response = await provider.chat(state["messages"], registry.tools)
 
         message: dict = {"role": "assistant", "content": response.content}
+
+        # Carried opaquely for providers that must replay their own output
+        # verbatim. Claude needs it: with thinking and tool use combined, its
+        # thinking blocks have to be echoed back unchanged on the next turn,
+        # and rebuilding them from `content` would silently drop them. Nothing
+        # in the graph reads this - it only has to survive the round trip.
+        if response.raw_content is not None:
+            message["_claude_content"] = response.raw_content
         if response.tool_calls:
             message["tool_calls"] = [
                 {"id": call.id, "name": call.name, "arguments": call.arguments}

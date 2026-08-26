@@ -163,4 +163,29 @@ def ollama_options() -> dict:
 
 # Used by the retrieval agent, not the orchestrator - kept here so every model
 # choice in the project is visible in one place. 768 dimensions, ~274MB.
+# ---------------------------------------------------------------------------
+# Claude fallback
+# ---------------------------------------------------------------------------
+# The escalation path docs/architecture.md calls "the real answer for anything
+# sustained". Local inference on a 4GB card is the default because it is free;
+# this exists for the runs where the small model is not good enough, and the
+# measured cost of the small model is tool-selection accuracy.
+#
+# The key is read from the environment and never stored in this repo. Without
+# ANTHROPIC_API_KEY set, escalation raises rather than silently falling back to
+# the local model - a request that asked for the better model and quietly got
+# the weaker one is the kind of failure this project keeps finding.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5")
+
+# A ceiling, not a spend: billing is on tokens actually produced. Large enough
+# that a long answer is never truncated mid-thought.
+CLAUDE_MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "16000"))
+
+# Server-side refusal fallbacks. Recommended for this model, and enabled by
+# default, but it rides on a beta an organisation may not have turned on - set
+# CLAUDE_FALLBACKS=off if requests start failing on the beta header rather than
+# on anything you did.
+_fallbacks = os.environ.get("CLAUDE_FALLBACKS", "on").strip().lower()
+CLAUDE_FALLBACKS = _fallbacks not in ("off", "false", "0", "no")
+
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")

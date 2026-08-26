@@ -62,7 +62,7 @@ def wire(monkeypatch):
     def _wire(provider, registry=None):
         registry = registry or DiscoverableRegistry()
         monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
-        monkeypatch.setattr(api, "get_provider", lambda: provider)
+        monkeypatch.setattr(api, "get_provider", lambda *a, **k: provider)
         return registry
 
     return _wire
@@ -233,12 +233,12 @@ async def test_discovery_is_not_repeated_for_every_run(monkeypatch):
     registry = CountingRegistry()
     monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
     monkeypatch.setattr(
-        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+        api, "get_provider", lambda *a, **k: ScriptedProvider([LLMResponse(content="ok")])
     )
 
     for _ in range(3):
         monkeypatch.setattr(
-            api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+            api, "get_provider", lambda *a, **k: ScriptedProvider([LLMResponse(content="ok")])
         )
         await collect("anything")
 
@@ -255,7 +255,7 @@ async def test_an_empty_discovery_is_never_cached(monkeypatch):
     """
     registry = CountingRegistry(tools=[])
     monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
-    monkeypatch.setattr(api, "get_provider", lambda: ScriptedProvider([]))
+    monkeypatch.setattr(api, "get_provider", lambda *a, **k: ScriptedProvider([]))
 
     await collect("first")
     await collect("second")
@@ -268,7 +268,7 @@ async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
     """A failed discovery must not wedge the process until someone restarts it."""
     registry = CountingRegistry(tools=[])
     monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
-    monkeypatch.setattr(api, "get_provider", lambda: ScriptedProvider([]))
+    monkeypatch.setattr(api, "get_provider", lambda *a, **k: ScriptedProvider([]))
 
     events = await collect("while down")
     assert [name for name, _ in events] == ["run_error"]
@@ -276,7 +276,7 @@ async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
     # The agents come back.
     registry.tools = DiscoverableRegistry().tools
     monkeypatch.setattr(
-        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="back")])
+        api, "get_provider", lambda *a, **k: ScriptedProvider([LLMResponse(content="back")])
     )
 
     events = await collect("after recovery")
@@ -297,7 +297,7 @@ async def test_concurrent_first_requests_discover_once(monkeypatch):
     registry.discover = slow_discover
     monkeypatch.setattr(api, "MCPToolRegistry", lambda: registry)
     monkeypatch.setattr(
-        api, "get_provider", lambda: ScriptedProvider([LLMResponse(content="ok")])
+        api, "get_provider", lambda *a, **k: ScriptedProvider([LLMResponse(content="ok")])
     )
 
     await asyncio.gather(*(collect(f"task {i}") for i in range(5)))
@@ -334,7 +334,7 @@ class BlockingProvider:
 
 def _wire_blocking(monkeypatch, provider):
     monkeypatch.setattr(api, "MCPToolRegistry", lambda: DiscoverableRegistry())
-    monkeypatch.setattr(api, "get_provider", lambda: provider)
+    monkeypatch.setattr(api, "get_provider", lambda *a, **k: provider)
 
 
 async def test_a_second_run_waits_instead_of_competing_for_the_gpu(monkeypatch):

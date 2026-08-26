@@ -231,7 +231,7 @@ def _sse(event: str, **payload) -> dict:
     return {"event": event, "data": json.dumps(payload)}
 
 
-async def _run(task: str):
+async def _run(task: str, escalate: bool = False):
     """
     Drive the graph and translate each step into an event.
 
@@ -296,7 +296,7 @@ async def _run(task: str):
             }
 
             try:
-                async for chunk in build_graph(registry, get_provider()).astream(state):
+                async for chunk in build_graph(registry, get_provider(escalate)).astream(state):
                     for node, update in chunk.items():
                         messages = update.get("messages") or []
                         if update.get("iterations") is not None:
@@ -355,7 +355,11 @@ async def stream(request):
     task = request.query_params.get("task", "").strip()
     if not task:
         return JSONResponse({"error": "missing ?task="}, status_code=400)
-    return EventSourceResponse(_run(task))
+
+    # Escalation is opt-in per request rather than a heuristic. See
+    # get_provider for why there is no automatic rule yet.
+    escalate = request.query_params.get("escalate", "").lower() in ("1", "true", "yes", "on")
+    return EventSourceResponse(_run(task, escalate=escalate))
 
 
 @asynccontextmanager

@@ -19,6 +19,7 @@
   .error      { border-color: #dc2626; }
   .truncated  { border-color: #d97706; background: #fffbeb; }
   .queued     { border-color: #64748b; background: #f8fafc; }
+  #esc        { font-size: .85rem; opacity: .8; margin-left: .6rem; }
   .busy       { border-color: #dc2626; background: #fef2f2; }
   .answer pre { font-size: .95rem; opacity: 1; }
 </style>
@@ -29,6 +30,9 @@
 <form id="f">
   <input id="task" placeholder="Ask something…" value="What is a Kubernetes StatefulSet?" autocomplete="off">
   <button id="go">Run</button>
+  <label id="esc" title="Send this run to the Claude API instead of the local model. Costs money; needs ANTHROPIC_API_KEY set on the server.">
+    <input type="checkbox" id="escalate"> escalate to Claude
+  </label>
 </form>
 
 <div id="out"></div>
@@ -60,7 +64,11 @@
     go.disabled = true;
     go.textContent = 'Running…';
 
-    source = new EventSource('/stream?task=' + encodeURIComponent(document.getElementById('task').value));
+    // Escalation is a deliberate per-request choice, not a heuristic - see
+    // get_provider in orchestrator/llm.py for why there is no automatic rule.
+    const escalate = document.getElementById('escalate').checked;
+    source = new EventSource('/stream?task=' + encodeURIComponent(document.getElementById('task').value)
+      + (escalate ? '&escalate=1' : ''));
 
     source.addEventListener('tools', (e) =>
       step('tools', 'tools discovered', JSON.parse(e.data).tools.join(', ')));
