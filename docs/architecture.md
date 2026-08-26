@@ -276,11 +276,48 @@ Kubernetes story.
   on that label.
 - `ddgs` scrapes HTML rather than calling a supported API. It rate-limits under
   rapid use; swapping in a keyed search API means changing `SearchService` only.
-- A small local model will skip `index_documents` unless told emphatically to call
-  it, because indexing benefits future runs and does nothing for the answer in
-  progress. Currently handled in the system prompt; making it deterministic would
-  mean the orchestrator hardcoding the search/index pairing, which trades away the
-  routing generality the tool-ownership map provides.
+- ~~A small local model will skip `index_documents`~~ - **resolved**, see
+  "Decision: the producer indexes its own output" below.
+
+## Decision: the producer indexes its own output
+
+`index_documents` was never being called. The system prompt asks the model to
+index after searching; the small local model reliably declines, and it is right
+to - indexing pays off on the NEXT run and only costs tokens on this one. The
+result was a durable index that nothing ever wrote to, which made the retrieval
+agent's persistence story hollow.
+
+The Known gaps entry above framed the only alternative as the orchestrator
+calling `index_documents` itself after every `search_web`, and rejected it,
+because hardcoding two specific tools into the router trades away the routing
+generality that the tool-ownership map exists to provide. That reasoning still
+holds. What it missed is a third option: the side effect can live with the agent
+that PRODUCED the data. The research agent now indexes its own results, and the
+loop is untouched - a tool simply does its own housekeeping.
+
+This is real coupling. The research agent has an opinion about another agent now,
+where before it had none, and that is a cost rather than a free win. Two
+properties are what make it acceptable:
+
+- **Best effort.** If the retrieval agent is unreachable, the search still
+  succeeds. Verified by pointing the research agent at a dead address in the
+  cluster: the search returned normally in 2.5s. The isolation this document
+  claims for the multi-server split is only true if clients are written to
+  uphold it, and this is the first place in the project where that was actually
+  at stake.
+- **Counted.** `search_results_indexed_total{status="stored"|"skipped"}`.
+  Best-effort work that fails silently is precisely how a corpus stays empty
+  while every dashboard looks healthy - the same shape of failure as the
+  analyze_code stub and the eval case that measured a side effect.
+
+That counter proved its worth immediately. The first deployment indexed nothing:
+the client called `asyncio.run` from a FastMCP sync tool, which runs on the event
+loop thread rather than a worker, so it raised and the best-effort handler
+swallowed it. Searches kept succeeding. Without the skipped counter and a log
+line, an empty corpus would have looked exactly like a working one.
+
+Measured: one search took the corpus from 14 documents to 19. Repeats do not
+accumulate, because the store now skips text it already holds.
 
 ## Build plan
 
