@@ -29,7 +29,26 @@ TOOL_LATENCY = Histogram("tool_call_duration_seconds", "Tool call latency", ["to
 METRICS_PORT = 9102
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 
-mcp = FastMCP("code-analysis-agent", host="0.0.0.0", port=MCP_PORT)
+# stateless_http=True: no Mcp-Session-Id is issued, so every request stands
+# alone and any replica can serve any of them.
+#
+# This was MEASURED, not assumed. With two replicas behind the Service the
+# session handshake landed on one pod and the next request round-robined to
+# the other, which had never seen that session id, answered 404, and the
+# client raised McpError: Session terminated - three attempts out of three.
+# At one replica the same code succeeded three out of three.
+#
+# The distinction that caused it is worth keeping: these agents are
+# stateless, but the TRANSPORT was not. Holding no state does not make a
+# service horizontally scalable if the protocol in front of it is
+# session-oriented. Nothing is lost here - the tools are pure functions, and
+# the retrieval agent keeps its state in sqlite rather than in a session.
+mcp = FastMCP(
+    "code-analysis-agent",
+    host="0.0.0.0",
+    port=MCP_PORT,
+    stateless_http=True,
+)
 
 
 class CodeAnalysisService:
