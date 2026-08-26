@@ -196,6 +196,32 @@ From the orchestrator, about the loop rather than individual tools:
   request is queued and told so, and refused past a cap. Raise
   `MAX_CONCURRENT_RUNS` where there is headroom.
 
+## Escalating to Claude
+
+Local inference is the default because it is free. `docs/architecture.md`
+concludes that a 4GB laptop GPU is under-specified for this workload, and the
+Claude API is the escalation path for runs where the small model is not good
+enough — its measured cost is tool-selection accuracy, not fluency.
+
+Escalation is **manual, per request**: tick *escalate to Claude* in the UI, or
+add `&escalate=1` to `/stream`. An automatic rule (after N iterations, or on a
+failed tool selection) was left for later — a three-case eval cannot tell
+whether such a heuristic helps, and spending money on a guess is worse than a
+switch somebody chose to flip.
+
+```bash
+export ANTHROPIC_API_KEY=...   # read from the environment, never stored here
+```
+
+Without the key, an escalated request **fails** with a message naming the
+missing variable. It does not quietly answer with the local model — a request
+that asked for the better model and silently got the weaker one is the failure
+this project keeps having to correct.
+
+Set `CLAUDE_MODEL` to change the model and `CLAUDE_FALLBACKS=off` to drop the
+server-side refusal fallbacks, which ride on a beta not every organisation has
+enabled.
+
 ## Evaluation
 
 ```bash
