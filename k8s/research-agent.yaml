@@ -7,7 +7,17 @@ kind: Deployment
 metadata:
   name: research-agent
 spec:
-  replicas: 1
+  # Two, deliberately. The architecture notes argue that stateless agents can
+  # be scaled freely while the retrieval agent cannot, and until now that was
+  # asserted in prose with every replicas: 1 in the repo quietly contradicting
+  # it. This is the claim made falsifiable.
+  #
+  # It only works because MCPToolRegistry opens a fresh session per operation
+  # rather than holding one connection for the life of the process: each call
+  # is a new connection, so kube-proxy is free to place it on either pod. A
+  # long-lived shared session would have pinned every call to whichever pod it
+  # first connected to, and the second replica would sit idle.
+  replicas: 2
   selector:
     matchLabels: { app: research-agent }
   template:
