@@ -37,6 +37,18 @@ spec:
         - name: research-agent
           image: agent-orchestrator/research-agent:latest
           imagePullPolicy: IfNotPresent  # so kind/minikube uses the locally-built image
+          env:
+            # After a successful search this agent hands its results to the
+            # retrieval agent to index - see agents/research_agent/indexer.py
+            # for why the side effect lives with the producer of the data
+            # rather than in the orchestrator.
+            #
+            # Best effort: if this address is wrong or the retrieval agent is
+            # down, searches still succeed and the failure shows up as
+            # search_results_indexed_total{status="skipped"} rather than as a
+            # broken tool.
+            - name: RETRIEVAL_AGENT_URL
+              value: "http://retrieval-agent-service:8000/mcp"
           ports:
             # Named on purpose: Prometheus selects the scrape target by port
             # NAME rather than by matching numbers. Its relabel regexes are RE2,

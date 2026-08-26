@@ -19,6 +19,7 @@ Pattern used throughout this project:
 import os
 import time
 from ddgs import DDGS
+from indexer import index_results
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -39,6 +40,17 @@ TOOL_CALLS = Counter(
     "Total number of tool calls",
     ["tool_name", "status"],  # labels let you slice metrics in Grafana
 )
+# Search results are indexed into the retrieval agent after a successful
+# search - see indexer.py for why the side effect lives here rather than in
+# the orchestrator. It is best effort, so it needs its own counter: indexing
+# that fails quietly is how a corpus stays empty while every dashboard looks
+# healthy.
+RESULTS_INDEXED = Counter(
+    "search_results_indexed_total",
+    "Search results handed to the retrieval agent, by outcome",
+    ["status"],
+)
+
 TOOL_LATENCY = Histogram(
     "tool_call_duration_seconds",
     "Tool call latency in seconds",
@@ -168,6 +180,15 @@ def search_web(query: str) -> str:
     try:
         result = search_service.run(query)
         TOOL_CALLS.labels(tool_name="search_web", status="success").inc()
+
+        # Housekeeping, not part of the answer. The model was asked to do this
+        # via the system prompt and reliably would not, because indexing pays
+        # off on the NEXT run and costs tokens on this one. Doing it here means
+        # the corpus grows without the orchestrator hardcoding a search/index
+        # pairing - and it cannot fail this call, only be counted.
+        stored = index_results(result, source=f"web-search: {query}")
+        RESULTS_INDEXED.labels(status="stored" if stored else "skipped").inc()
+
         return result
     except Exception:
         TOOL_CALLS.labels(tool_name="search_web", status="error").inc()
