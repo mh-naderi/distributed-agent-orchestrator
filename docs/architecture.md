@@ -28,7 +28,8 @@ The last two points used to be aspirational. They aren't anymore - see below.
 
 An earlier version of this project had three stateless agents. That made the
 multi-server architecture **unfalsifiable**: every agent held nothing, restarted
-instantly, and could be scaled to any number of replicas. Merging all three into
+instantly, and could be scaled to any number of replicas (with a caveat about the
+transport - see below). Merging all three into
 one MCP server would have broken nothing. The distribution was asserted in this
 document but no code depended on it.
 
@@ -51,6 +52,43 @@ outlive the process. That single property is what forces the rest:
   replicas needs a different design (a real vector database, or read replicas
   over shared storage). This constraint is the point: it is what makes the
   stateless agents' freedom to scale meaningful by contrast.
+
+## A stateless agent is not a stateless protocol
+
+The section above says the stateless agents can be scaled to any number of
+replicas. That was asserted for a long time while every `replicas:` in the repo
+said `1`, and when it was finally tested it turned out to be false as written.
+
+Two replicas of the research agent behind its Service, and the client failed
+three times out of three with `McpError: Session terminated`. At one replica the
+identical code succeeded three out of three.
+
+The cause is the transport, not the agent. MCP Streamable HTTP issues an
+`Mcp-Session-Id`; the handshake established a session on one pod, kube-proxy
+round-robined the next request to the other pod, and that pod had never heard of
+the id - so it answered 404 and the client concluded the session was gone.
+
+Holding no state does not make a service horizontally scalable. The protocol in
+front of it has to be stateless too, and these two properties were being treated
+as one.
+
+The fix is `FastMCP(..., stateless_http=True)` on all three agents: no session
+ids, every request self-contained, any replica able to serve any of them. The
+test that failed 3/3 then passed 10/10, and eight tool calls through the Service
+split 3/5 across the two pods. Nothing was given up, because the tools are pure
+functions and the retrieval agent keeps its state in sqlite rather than in a
+session.
+
+Two things follow that are worth keeping in mind:
+
+- **The retrieval agent still cannot be scaled**, and now for a cleaner reason.
+  It is not the transport - it is the volume. That is the distinction this
+  document was trying to draw all along, and it is sharper once the protocol
+  stops being a confounding factor.
+- **Session affinity would have hidden this.** `sessionAffinity: ClientIP` on the
+  Service pins a client to one backend, which would make the errors disappear
+  while sending every request to a single replica. The second pod would sit idle
+  and the scaling claim would look proven when nothing had changed.
 
 ## Decision: why the summarizer agent was removed
 
