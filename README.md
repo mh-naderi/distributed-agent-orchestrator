@@ -189,6 +189,10 @@ From the orchestrator, about the loop rather than individual tools:
   guardrail mean the loop is regularly running out of road, which no per-tool
   metric would reveal because each call looks fine
 - `orchestrator_tools_discovered`, `orchestrator_discovery_failures_total`
+- `orchestrator_runs_queued_total` — runs that waited for a slot. Only one
+  run executes at a time, because inference shares a single 4GB GPU; a second
+  request is queued and told so, and refused past a cap. Raise
+  `MAX_CONCURRENT_RUNS` where there is headroom.
 
 ## Evaluation
 
