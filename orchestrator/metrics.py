@@ -48,7 +48,8 @@ METRICS_PORT = int(os.environ.get("ORCHESTRATOR_METRICS_PORT", "9103"))
 # Outcome is a label rather than three counters so a dashboard can show the
 # split without hardcoding which outcomes exist. Values: "answered",
 # "truncated" (hit the guardrail), "failed" (raised), "no_tools" (discovery
-# came back empty, so the run never started).
+# came back empty, so the run never started), "rejected" (refused because
+# too many runs were already queued).
 RUNS = Counter(
     "orchestrator_runs_total",
     "Orchestrator runs, by how they ended",
@@ -74,6 +75,14 @@ RUN_ITERATIONS = Histogram(
 # Discovery is best-effort by design - MCPToolRegistry logs an unreachable
 # agent and carries on, so a partial system still serves requests. That
 # tolerance is only safe if the degradation is visible somewhere.
+# Runs that had to wait for a slot. Distinct from rejected: waiting means the
+# limiter is doing its job, while a rising rejection count means the queue cap
+# is being hit and people are being turned away.
+RUNS_QUEUED = Counter(
+    "orchestrator_runs_queued_total",
+    "Runs that waited for a concurrency slot before starting",
+)
+
 DISCOVERY_FAILURES = Counter(
     "orchestrator_discovery_failures_total",
     "Discovery attempts that reached no agents at all",

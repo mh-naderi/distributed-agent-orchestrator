@@ -37,7 +37,13 @@ from prometheus_client import start_http_server
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from orchestrator.config import AGENT_URLS, MCP_DISCOVERY_TTL, OLLAMA_MODEL
+from orchestrator.config import (
+    AGENT_URLS,
+    MAX_CONCURRENT_RUNS,
+    MAX_QUEUED_RUNS,
+    MCP_DISCOVERY_TTL,
+    OLLAMA_MODEL,
+)
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
@@ -47,6 +53,7 @@ from orchestrator.metrics import (
     RUN_DURATION,
     RUN_ITERATIONS,
     RUNS,
+    RUNS_QUEUED,
     TOOLS_DISCOVERED,
 )
 
@@ -155,6 +162,63 @@ class _RegistryCache:
 _registry_cache = _RegistryCache()
 
 
+class _RunLimiter:
+    """
+    Caps how many runs execute at once.
+
+    The constraint is physical, not architectural: a run drives inference on a
+    single 4GB GPU, and one run with both models resident was measured leaving
+    377-582MiB free. The driver reset this project hit twice happened at
+    157MiB. A second concurrent run has nowhere to come from, and the failure
+    it produces is a machine-wide bugcheck rather than a handled error - which
+    is exactly the kind of failure worth spending a semaphore to avoid.
+
+    Queue rather than refuse, because refusing throws away work somebody asked
+    for. But queue VISIBLY and with a bound: a silent queue makes the page look
+    hung, and an unbounded one just moves the failure to a pile of requests that
+    all time out together.
+
+    A class rather than a module-level semaphore so tests can reset it. Shared
+    state that cannot be reset produces failures in whichever test happens to
+    run second, which is a miserable thing to debug - see the registry cache.
+    """
+
+    def __init__(self, limit: int = MAX_CONCURRENT_RUNS, max_waiting: int = MAX_QUEUED_RUNS):
+        self._limit = limit
+        self._max_waiting = max_waiting
+        self._semaphore = asyncio.Semaphore(limit)
+        self._waiting = 0
+
+    @property
+    def waiting(self) -> int:
+        return self._waiting
+
+    def would_wait(self) -> bool:
+        """True if every slot is taken, so acquiring will block."""
+        return self._semaphore.locked()
+
+    def is_full(self) -> bool:
+        """True if the queue is at its cap and further work should be refused."""
+        return self._waiting >= self._max_waiting
+
+    async def acquire(self) -> None:
+        self._waiting += 1
+        try:
+            await self._semaphore.acquire()
+        finally:
+            self._waiting -= 1
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    def reset(self) -> None:
+        self._semaphore = asyncio.Semaphore(self._limit)
+        self._waiting = 0
+
+
+_run_limiter = _RunLimiter()
+
+
 def _sse(event: str, **payload) -> dict:
     """
     One SSE frame. sse-starlette turns this into `event:` / `data:` lines.
@@ -202,57 +266,82 @@ async def _run(task: str):
 
         yield _sse("tools", tools=[t["name"] for t in registry.tools])
 
-        state = {
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": task},
-            ],
-            "iterations": 0,
-        }
+        # Everything above this point is cheap and touches no GPU. The gate
+        # goes here, immediately before inference starts.
+        if _run_limiter.would_wait():
+            if _run_limiter.is_full():
+                outcome = "rejected"
+                yield _sse(
+                    "busy",
+                    message=(
+                        f"{_run_limiter.waiting} run(s) already waiting - this one was "
+                        f"refused rather than added to a queue that cannot drain. "
+                        f"Try again shortly."
+                    ),
+                )
+                return
+            RUNS_QUEUED.inc()
+            # Announced BEFORE waiting. A silent queue is indistinguishable
+            # from a hung page.
+            yield _sse("queued", ahead=_run_limiter.waiting + 1)
 
+        await _run_limiter.acquire()
         try:
-            async for chunk in build_graph(registry, get_provider()).astream(state):
-                for node, update in chunk.items():
-                    messages = update.get("messages") or []
-                    if update.get("iterations") is not None:
-                        iterations = update["iterations"]
+            state = {
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": task},
+                ],
+                "iterations": 0,
+            }
 
-                    if node == "reason":
-                        message = messages[-1] if messages else {}
-                        if message.get("tool_calls"):
-                            for call in message["tool_calls"]:
+            try:
+                async for chunk in build_graph(registry, get_provider()).astream(state):
+                    for node, update in chunk.items():
+                        messages = update.get("messages") or []
+                        if update.get("iterations") is not None:
+                            iterations = update["iterations"]
+
+                        if node == "reason":
+                            message = messages[-1] if messages else {}
+                            if message.get("tool_calls"):
+                                for call in message["tool_calls"]:
+                                    yield _sse(
+                                        "tool_call",
+                                        iteration=update.get("iterations"),
+                                        name=call["name"],
+                                        arguments=call["arguments"],
+                                    )
+                            else:
+                                outcome = "answered"
+                                yield _sse("answer", content=message.get("content", ""))
+
+                        elif node == "truncate":
+                            # A separate event, not an answer. The run ended
+                            # because the guardrail fired, and calling that an
+                            # "answer" would present a stop notice as a result.
+                            outcome = "truncated"
+                            message = messages[-1] if messages else {}
+                            yield _sse("truncated", content=message.get("content", ""))
+
+                        elif node == "act":
+                            for message in messages:
                                 yield _sse(
-                                    "tool_call",
-                                    iteration=update.get("iterations"),
-                                    name=call["name"],
-                                    arguments=call["arguments"],
+                                    "tool_result",
+                                    name=message.get("name", "?"),
+                                    output=message.get("content", ""),
                                 )
-                        else:
-                            outcome = "answered"
-                            yield _sse("answer", content=message.get("content", ""))
+            except Exception as exc:
+                logger.exception("run failed")
+                yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
+                return
 
-                    elif node == "truncate":
-                        # A separate event, not an answer. The run ended because
-                        # the guardrail fired, and calling that an "answer" would
-                        # present a stop notice as a result. Previously this path
-                        # emitted nothing at all and the page just stopped.
-                        outcome = "truncated"
-                        message = messages[-1] if messages else {}
-                        yield _sse("truncated", content=message.get("content", ""))
-
-                    elif node == "act":
-                        for message in messages:
-                            yield _sse(
-                                "tool_result",
-                                name=message.get("name", "?"),
-                                output=message.get("content", ""),
-                            )
-        except Exception as exc:
-            logger.exception("run failed")
-            yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
-            return
-
-        yield _sse("done")
+            yield _sse("done")
+        finally:
+            # Released on every path, including the client disconnecting
+            # mid-run - a generator's finally runs when it is closed. Leaking
+            # a slot would wedge the service for everyone after.
+            _run_limiter.release()
     finally:
         # A generator's finally runs on close too, so a client that navigates
         # away mid-run is still counted rather than vanishing from the totals.

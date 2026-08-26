@@ -41,7 +41,7 @@ async def collect(task: str) -> list[tuple[str, dict]]:
 @pytest.fixture(autouse=True)
 def clean_registry_cache():
     """
-    Discovery is cached process-wide, so it leaks between tests.
+    Discovery and the run limiter are process-wide, so both leak between tests.
 
     Without this a test that wires an empty registry still sees whatever a
     previous test discovered. autouse because forgetting it in one test
@@ -49,8 +49,10 @@ def clean_registry_cache():
     debug.
     """
     api._registry_cache.clear()
+    api._run_limiter.reset()
     yield
     api._registry_cache.clear()
+    api._run_limiter.reset()
 
 
 @pytest.fixture
@@ -301,3 +303,146 @@ async def test_concurrent_first_requests_discover_once(monkeypatch):
     await asyncio.gather(*(collect(f"task {i}") for i in range(5)))
 
     assert registry.discoveries == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: one run touches the GPU at a time
+# ---------------------------------------------------------------------------
+
+
+class BlockingProvider:
+    """A model call that parks until released, so overlap is deterministic."""
+
+    def __init__(self):
+        import asyncio
+
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.concurrent = 0
+        self.max_concurrent = 0
+
+    async def chat(self, messages, tools):
+        self.concurrent += 1
+        self.max_concurrent = max(self.max_concurrent, self.concurrent)
+        self.entered.set()
+        try:
+            await self.release.wait()
+            return LLMResponse(content="done")
+        finally:
+            self.concurrent -= 1
+
+
+def _wire_blocking(monkeypatch, provider):
+    monkeypatch.setattr(api, "MCPToolRegistry", lambda: DiscoverableRegistry())
+    monkeypatch.setattr(api, "get_provider", lambda: provider)
+
+
+async def test_a_second_run_waits_instead_of_competing_for_the_gpu(monkeypatch):
+    """
+    The whole point. Two runs at once would put two models on a 4GB card, and
+    the failure measured on this hardware is a driver reset, not a handled
+    error.
+    """
+    import asyncio
+
+    provider = BlockingProvider()
+    _wire_blocking(monkeypatch, provider)
+
+    first = asyncio.create_task(collect("first"))
+    await provider.entered.wait()
+
+    second = asyncio.create_task(collect("second"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    provider.release.set()
+    events_first, events_second = await asyncio.gather(first, second)
+
+    assert provider.max_concurrent == 1, "two runs were inside the model at once"
+    assert "queued" in [name for name, _ in events_second]
+    assert "queued" not in [name for name, _ in events_first]
+
+
+async def test_the_queue_is_announced_before_the_wait(monkeypatch):
+    """A silent queue is indistinguishable from a hung page."""
+    import asyncio
+
+    provider = BlockingProvider()
+    _wire_blocking(monkeypatch, provider)
+
+    first = asyncio.create_task(collect("first"))
+    await provider.entered.wait()
+
+    stream = api._run("second")
+    seen = [(await stream.__anext__())["event"] for _ in range(2)]
+
+    assert seen == ["tools", "queued"]
+
+    provider.release.set()
+    await stream.aclose()
+    await first
+
+
+async def test_runs_beyond_the_queue_cap_are_refused(monkeypatch):
+    """An unbounded queue just moves the failure to a pile of timeouts."""
+    import asyncio
+
+    provider = BlockingProvider()
+    _wire_blocking(monkeypatch, provider)
+    monkeypatch.setattr(api, "_run_limiter", api._RunLimiter(limit=1, max_waiting=1))
+
+    first = asyncio.create_task(collect("first"))
+    await provider.entered.wait()
+
+    queued = asyncio.create_task(collect("queued"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    refused = await collect("refused")
+
+    assert [name for name, _ in refused] == ["tools", "busy"]
+    assert "refused" in dict(refused)["busy"]["message"]
+
+    provider.release.set()
+    await asyncio.gather(first, queued)
+
+
+async def test_a_refused_run_is_counted_separately(monkeypatch):
+    """rejected must not look like a failure - nothing broke, it was declined."""
+    import asyncio
+
+    provider = BlockingProvider()
+    _wire_blocking(monkeypatch, provider)
+    monkeypatch.setattr(api, "_run_limiter", api._RunLimiter(limit=1, max_waiting=0))
+
+    first = asyncio.create_task(collect("first"))
+    await provider.entered.wait()
+
+    before_rejected = runs("rejected")
+    before_failed = runs("failed")
+    await collect("refused")
+
+    assert runs("rejected") == before_rejected + 1
+    assert runs("failed") == before_failed
+
+    provider.release.set()
+    await first
+
+
+async def test_the_slot_is_released_when_a_client_disconnects(monkeypatch):
+    """
+    A leaked slot wedges the service for everyone after.
+
+    Closing the generator is what a client navigating away does, and the
+    release lives in a finally so that path is covered too.
+    """
+    provider = BlockingProvider()
+    _wire_blocking(monkeypatch, provider)
+
+    stream = api._run("abandoned")
+    await stream.__anext__()      # tools
+    provider.release.set()
+    await stream.__anext__()      # answer - the slot is held at this point
+    await stream.aclose()         # client goes away
+
+    assert not api._run_limiter.would_wait(), "the slot was never given back"

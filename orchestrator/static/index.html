@@ -18,6 +18,8 @@
   .answer     { border-color: #16a34a; }
   .error      { border-color: #dc2626; }
   .truncated  { border-color: #d97706; background: #fffbeb; }
+  .queued     { border-color: #64748b; background: #f8fafc; }
+  .busy       { border-color: #dc2626; background: #fef2f2; }
   .answer pre { font-size: .95rem; opacity: 1; }
 </style>
 
@@ -75,6 +77,15 @@
 
     source.addEventListener('answer', (e) =>
       step('answer', 'answer', JSON.parse(e.data).content));
+
+    // Only one run may touch the GPU at a time, so a second tab waits rather
+    // than competing. Announced, because a silent wait looks like a hang.
+    source.addEventListener('queued', (e) =>
+      step('queued', 'waiting for a slot',
+        `another run is in progress — position ${JSON.parse(e.data).ahead} in the queue`));
+
+    source.addEventListener('busy', (e) =>
+      step('busy', 'refused', JSON.parse(e.data).message));
 
     source.addEventListener('truncated', (e) =>
       step('truncated', 'stopped early', JSON.parse(e.data).content));

@@ -66,6 +66,25 @@ MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "120"))
 MCP_DISCOVERY_TTL = float(os.environ.get("MCP_DISCOVERY_TTL", "60"))
 
 # ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+# How many runs may execute at once. ONE, because the constraint is physical:
+# every run drives inference on a single 4GB GPU, and a run with both the chat
+# and embedding models resident was MEASURED leaving 377-582MiB free. The
+# VIDEO_TDR_FAILURE this project hit twice occurred at 157MiB. Two concurrent
+# runs have nowhere to come from.
+#
+# This is a property of the hardware, not of the code - raise it on a machine
+# with headroom, or where inference is remote.
+MAX_CONCURRENT_RUNS = int(os.environ.get("MAX_CONCURRENT_RUNS", "1"))
+
+# How many may wait for a slot before further requests are refused outright.
+# Queueing without a bound is its own failure: requests pile up, every one of
+# them times out, and the page still says nothing useful. Refusing early is
+# more honest than a queue that cannot drain.
+MAX_QUEUED_RUNS = int(os.environ.get("MAX_QUEUED_RUNS", "4"))
+
+# ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
 # Ollama runs on the host and serves an HTTP API on 11434 by default.
