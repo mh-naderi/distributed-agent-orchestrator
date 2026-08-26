@@ -1,0 +1,64 @@
+# Continuous integration.
+#
+# WHAT THIS CAN AND CANNOT TELL YOU. 76 of the 85 tests need no agents, no
+# cluster, no GPU and no Ollama - they run anywhere in seconds. The other 9 are
+# integration tests that skip when the agent servers are unreachable, which is
+# always the case here.
+#
+# That skip is deliberate, and it has a cost worth stating plainly: those 9
+# tests are exactly the ones that once sat out a whole day of local runs while
+# two of them were stale and failing. A green tick here means the loop, the
+# store, the analyser, the SSE layer and the eval harness are sound. It does
+# NOT mean the system works end to end. Only running it does that.
+#
+# Hence -rs: skipped tests are listed with their reason, so the log says what
+# was not covered rather than quietly reporting a smaller number.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Both versions run even if one fails - knowing it is version-specific is
+      # most of the diagnosis.
+      fail-fast: false
+      matrix:
+        # 3.11 is what the project is developed on; 3.12 is what every agent
+        # image actually runs (python:3.12-slim). Testing one would leave the
+        # other unverified, and the gap between them is where a version-specific
+        # break would hide.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            orchestrator/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Check for unused imports and undefined names
+        # pyflakes rather than a new linter: it is already a dependency, because
+        # the code-analysis agent is built on it. The project's own analysis
+        # engine checking the project costs nothing extra to install and imposes
+        # no style opinions nobody chose.
+        run: python -m pyflakes orchestrator agents eval tests
+
+      - name: Run tests
+        run: python -m pytest -q -rs

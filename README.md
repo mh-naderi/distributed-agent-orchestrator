@@ -1,5 +1,7 @@
 # Distributed Agent Orchestrator
 
+[![tests](https://github.com/mh-naderi/distributed-agent-orchestrator/actions/workflows/tests.yml/badge.svg)](https://github.com/mh-naderi/distributed-agent-orchestrator/actions/workflows/tests.yml)
+
 A LangGraph orchestrator that routes tasks across specialized agents, each
 exposed as its own MCP (Model Context Protocol) server and deployed as an
 independent Kubernetes service, with Prometheus/Grafana observability.
