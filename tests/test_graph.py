@@ -69,15 +69,28 @@ async def test_history_accumulates_in_order():
     ]
 
 
-async def test_answer_without_tools_ends_after_one_iteration():
+async def test_an_answer_with_no_tool_call_is_nudged_once_then_accepted():
+    """
+    This used to end after a single iteration, and that is what let the
+    narration bug through: "no tool call" was read as "finished", so a model
+    that said "I need to search the web... let's do that first" ended the run
+    with a non-answer.
+
+    The cost is visible here and is the point of the trade: an answer that
+    genuinely needed no tool now pays one extra model call before it is
+    accepted. It is accepted - the nudge asks, it does not insist.
+    """
     registry = FakeRegistry()
-    provider = ScriptedProvider([LLMResponse(content="No tools needed.")])
+    provider = ScriptedProvider(
+        [LLMResponse(content="No tools needed."), LLMResponse(content="Still no tools needed.")]
+    )
 
     final = await build_graph(registry, provider).ainvoke(initial_state())
 
-    assert final["iterations"] == 1
+    assert final["iterations"] == 2, "the model was not given a second chance"
+    assert final["nudges"] == 1
     assert registry.calls == []
-    assert final["messages"][-1]["content"] == "No tools needed."
+    assert final["messages"][-1]["content"] == "Still no tools needed."
 
 
 async def test_parallel_tool_calls_all_execute():

@@ -78,6 +78,15 @@ RUN_ITERATIONS = Histogram(
 # Runs that had to wait for a slot. Distinct from rejected: waiting means the
 # limiter is doing its job, while a rising rejection count means the queue cap
 # is being hit and people are being turned away.
+# Runs where the model described a tool call instead of making one and had to
+# be asked again. Worth counting rather than just fixing: it is a property of
+# the model and the prompt, so a rising line here is evidence that a prompt
+# change made things worse, and a falling one is evidence a change helped.
+NUDGES = Counter(
+    "orchestrator_nudges_total",
+    "Runs re-prompted after the model narrated a tool call without making one",
+)
+
 RUNS_QUEUED = Counter(
     "orchestrator_runs_queued_total",
     "Runs that waited for a concurrency slot before starting",

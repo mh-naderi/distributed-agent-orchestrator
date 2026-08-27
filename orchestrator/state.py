@@ -32,3 +32,11 @@ class AgentState(TypedDict):
     #
     # No reducer, so the value a node returns simply replaces the old one.
     iterations: int
+
+    # How many times this run has been nudged after the model described a tool
+    # call instead of making one. Bounded to one, and tracked in state rather
+    # than in a closure because the nudge node has to know whether it already
+    # fired - two nudges in a row would be a loop, not a recovery.
+    #
+    # No reducer, so the value a node returns replaces the old one.
+    nudges: int

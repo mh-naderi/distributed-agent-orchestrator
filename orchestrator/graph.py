@@ -30,6 +30,20 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10  # guardrail against infinite loops - see project notes
 
+MAX_NUDGES = 1  # one recovery attempt, never a loop
+
+# Sent when the model DESCRIBES a tool call rather than making one.
+#
+# Deliberately does not name a tool or assume one is needed. The model may well
+# have been right that it has nothing to work with, and telling it to "call
+# search_web" would be putting the answer in its mouth - which is how a loop
+# starts inventing rather than reporting.
+NUDGE_PROMPT = (
+    "You did not call a tool. If you need one to answer, call it now. "
+    "If the information you need is not available to you, say so plainly "
+    "instead of describing what you would do."
+)
+
 SYSTEM_PROMPT = """You are an orchestrator. You answer by calling tools, not from memory.
 
 RULES:
@@ -148,6 +162,56 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
             ]
         }
 
+    def _acted_this_turn(messages: list[dict]) -> bool:
+        """
+        Has a tool actually run since the current question was asked?
+
+        Looks back only as far as the last user message, and that scope is a
+        deliberate trade rather than a free win.
+
+        Scoped to the turn, this catches a narrated tool call in ANY turn of a
+        conversation - but it also fires on a follow-up that was answered
+        legitimately from history, costing that answer one extra model call.
+        Scoped to the whole history instead, follow-ups would stay fast while a
+        narration in the third turn went uncaught.
+
+        The turn scope wins because the failure is documented and reproducible
+        while the cost is bounded: one extra call per run, and the answer is
+        correct either way. A missed narration ends a run with a non-answer
+        that looks exactly like an answer, which is worth far more than three
+        seconds of inference.
+        """
+        for message in reversed(messages):
+            if message["role"] == "user":
+                return False
+            if message["role"] == "tool":
+                return True
+        return False
+
+    async def nudge(state: AgentState) -> dict:
+        """
+        Give the model one more turn after it described a call instead of making
+        one.
+
+        THE FAILURE THIS EXISTS FOR. Asked about something that does not exist,
+        the model replied "I need to search the web for information about the
+        Quazzlemint Foundation's 2019 report. Let's do that first." - and
+        stopped. should_continue reads "no tool calls" as "finished", so the run
+        ended at iteration 1 and every consumer downstream, the page, the eval
+        harness and the judge alike, saw a normal answer. Reproduced 5 times out
+        of 5, so it is a behaviour rather than a fluke.
+
+        A user-role message rather than a system one, for portability: the
+        Claude provider lifts every system message into the top-level system
+        parameter, which would move this instruction away from the position
+        where it means something.
+        """
+        logger.info("model described a tool call without making one; nudging once")
+        return {
+            "messages": [{"role": "user", "content": NUDGE_PROMPT}],
+            "nudges": state.get("nudges", 0) + 1,
+        }
+
     def should_continue(state: AgentState) -> str:
         """
         Conditional routing. Reads the LLM's last decision and the iteration
@@ -164,20 +228,29 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         if state["messages"][-1].get("tool_calls"):
             return "continue"
 
+        # No tool call. That is usually a finished answer - but it is also what
+        # a model that narrated its intent looks like, and the two are
+        # indistinguishable from the message alone. The tiebreaker is whether
+        # anything actually ran for this question.
+        if state.get("nudges", 0) < MAX_NUDGES and not _acted_this_turn(state["messages"]):
+            return "nudge"
+
         return "end"
 
     graph = StateGraph(AgentState)
     graph.add_node("reason", call_llm)
     graph.add_node("act", call_mcp_tool)
     graph.add_node("truncate", note_truncation)
+    graph.add_node("nudge", nudge)
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges(
         "reason",
         should_continue,
-        {"continue": "act", "truncated": "truncate", "end": END},
+        {"continue": "act", "truncated": "truncate", "nudge": "nudge", "end": END},
     )
     graph.add_edge("act", "reason")
     graph.add_edge("truncate", END)
+    graph.add_edge("nudge", "reason")
 
     return graph.compile()

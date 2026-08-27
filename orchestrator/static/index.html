@@ -19,6 +19,7 @@
   .error      { border-color: #dc2626; }
   .truncated  { border-color: #d97706; background: #fffbeb; }
   .queued     { border-color: #64748b; background: #f8fafc; }
+  .nudge      { border-color: #7c3aed; background: #faf5ff; }
   #esc        { font-size: .85rem; opacity: .8; margin-left: .6rem; }
   .busy       { border-color: #dc2626; background: #fef2f2; }
   .answer pre { font-size: .95rem; opacity: 1; }
@@ -102,6 +103,9 @@
 
     // Only one run may touch the GPU at a time, so a second tab waits rather
     // than competing. Announced, because a silent wait looks like a hang.
+    source.addEventListener('nudge', (e) =>
+      step('nudge', 'asked again', JSON.parse(e.data).message));
+
     source.addEventListener('queued', (e) =>
       step('queued', 'waiting for a slot',
         `another run is in progress — position ${JSON.parse(e.data).ahead} in the queue`));

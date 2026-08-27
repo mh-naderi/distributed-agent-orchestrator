@@ -38,6 +38,23 @@ async def collect(task: str) -> list[tuple[str, dict]]:
     ]
 
 
+def asked_by_user(turn: list[dict]) -> list[str]:
+    """
+    The questions a person asked in one model turn.
+
+    Excludes the nudge, which is a user-role message the loop injects when the
+    model narrates a tool call instead of making one - see graph.NUDGE_PROMPT.
+    It is user-role for provider portability, not because a person said it.
+    """
+    from orchestrator.graph import NUDGE_PROMPT
+
+    return [
+        m["content"]
+        for m in turn
+        if m["role"] == "user" and m["content"] != NUDGE_PROMPT
+    ]
+
+
 async def collect_session(task: str, session_id: str) -> list[tuple[str, dict]]:
     """Drive _run with a session so history carries between calls."""
     return [
@@ -286,11 +303,17 @@ async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
     # The agents come back.
     registry.tools = DiscoverableRegistry().tools
     monkeypatch.setattr(
-        api, "get_provider", lambda *a, **k: ScriptedProvider([LLMResponse(content="back")])
+        api,
+        "get_provider",
+        lambda *a, **k: ScriptedProvider(
+            [LLMResponse(content="back"), LLMResponse(content="back")]
+        ),
     )
 
     events = await collect("after recovery")
-    assert [name for name, _ in events] == ["tools", "answer", "done"]
+    # The scripted answer carries no tool call, so the loop asks once more
+    # before accepting it - see graph.NUDGE_PROMPT.
+    assert [name for name, _ in events] == ["tools", "nudge", "answer", "done"]
 
 
 async def test_concurrent_first_requests_discover_once(monkeypatch):
@@ -465,45 +488,47 @@ async def test_the_slot_is_released_when_a_client_disconnects(monkeypatch):
 
 async def test_without_a_session_each_run_starts_fresh(wire):
     """The previous behaviour, and still right for a one-off question."""
-    provider = ScriptedProvider([LLMResponse(content="one"), LLMResponse(content="two")])
+    provider = ScriptedProvider([LLMResponse(content=f"turn {i}") for i in range(6)])
     wire(provider)
 
     await collect("first question")
     await collect("second question")
 
-    second_turn = provider.seen[1]
-    assert [m["content"] for m in second_turn if m["role"] == "user"] == ["second question"]
+    # seen[-1] rather than seen[1]: an answer with no tool call is nudged once,
+    # so each run now shows the provider more than one turn.
+    assert asked_by_user(provider.seen[-1]) == ["second question"]
 
 
 async def test_a_session_carries_the_previous_turn_into_the_next(wire):
     """
     The point of the feature: "now summarise that" needs something to refer to.
     """
-    provider = ScriptedProvider([LLMResponse(content="MCP is a protocol."), LLMResponse(content="ok")])
+    provider = ScriptedProvider(
+        [LLMResponse(content="MCP is a protocol.")] + [LLMResponse(content="ok")] * 5
+    )
     wire(provider)
 
     await collect_session("what is MCP?", "sess-1")
     await collect_session("summarise that", "sess-1")
 
-    second_turn = provider.seen[1]
-    questions = [m["content"] for m in second_turn if m["role"] == "user"]
-    answers = [m["content"] for m in second_turn if m["role"] == "assistant"]
+    last_turn = provider.seen[-1]
+    answers = [m["content"] for m in last_turn if m["role"] == "assistant"]
 
-    assert questions == ["what is MCP?", "summarise that"]
+    assert asked_by_user(last_turn) == ["what is MCP?", "summarise that"]
     assert "MCP is a protocol." in answers
 
 
 async def test_separate_sessions_do_not_leak_into_each_other(wire):
-    provider = ScriptedProvider(
-        [LLMResponse(content="a1"), LLMResponse(content="b1"), LLMResponse(content="b2")]
-    )
+    provider = ScriptedProvider([LLMResponse(content=f"answer {i}") for i in range(6)])
     wire(provider)
 
     await collect_session("question A", "sess-a")
     await collect_session("question B", "sess-b")
 
-    turn_for_b = provider.seen[1]
-    assert "question A" not in [m.get("content") for m in turn_for_b]
+    turn_for_b = provider.seen[-1]
+    assert asked_by_user(turn_for_b) == ["question B"], (
+        "session B saw another session's history"
+    )
 
 
 async def test_the_system_prompt_is_not_duplicated_on_a_follow_up(wire):
@@ -543,3 +568,77 @@ async def test_stored_history_is_trimmed(wire):
 
     stored = api._sessions.get("sess-3").messages
     assert estimate_chars(stored) <= history_budget_chars()
+
+
+# ---------------------------------------------------------------------------
+# The nudge, as the page sees it
+# ---------------------------------------------------------------------------
+
+
+async def test_a_narrated_tool_call_never_reaches_the_page_as_an_answer(wire):
+    """
+    The reason the answer is held rather than streamed immediately.
+
+    The reason node emits before the router has decided anything, so a narrated
+    tool call looks exactly like a final answer at that moment. Emitting it
+    would show a wrong answer, then a nudge, then the real one - and the wrong
+    one would be the first thing a person read.
+    """
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="I need to search the web. Let's do that first."),
+            LLMResponse(content="the real answer"),
+        ]
+    )
+    wire(provider)
+
+    events = await collect("what is a Quazzlemint?")
+    names = [name for name, _ in events]
+    answers = [payload["content"] for name, payload in events if name == "answer"]
+
+    assert names == ["tools", "nudge", "answer", "done"]
+    assert answers == ["the real answer"]
+    assert not any("Let's do that first" in a for a in answers)
+
+
+async def test_the_nudge_is_announced(wire):
+    """A silent extra round trip is an unexplained pause on the page."""
+    provider = ScriptedProvider(
+        [LLMResponse(content="I will search."), LLMResponse(content="done")]
+    )
+    wire(provider)
+
+    events = await collect("anything")
+
+    assert "nudge" in dict(events)
+    assert "without making one" in dict(events)["nudge"]["message"]
+
+
+async def test_a_run_that_used_a_tool_is_not_nudged(wire):
+    """
+    The narrow condition. A model that actually called something and then
+    answered is finished, and asking again would cost a model call for nothing.
+    """
+    registry = DiscoverableRegistry(results={"search_web": "found it"})
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "search_web", {"query": "x"})]),
+            LLMResponse(content="grounded answer"),
+        ]
+    )
+    wire(provider, registry)
+
+    events = await collect("a real question")
+
+    assert "nudge" not in [name for name, _ in events]
+    assert [name for name, _ in events] == ["tools", "tool_call", "tool_result", "answer", "done"]
+
+
+async def test_the_loop_nudges_at_most_once(wire):
+    """Two nudges in a row would be a loop, not a recovery."""
+    provider = ScriptedProvider([LLMResponse(content="I will search.")] * 6)
+    wire(provider)
+
+    events = await collect("anything")
+
+    assert [name for name, _ in events].count("nudge") == 1

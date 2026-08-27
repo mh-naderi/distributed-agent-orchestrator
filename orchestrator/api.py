@@ -55,6 +55,7 @@ from orchestrator.metrics import (
     RUN_DURATION,
     RUN_ITERATIONS,
     RUNS,
+    NUDGES,
     RUNS_QUEUED,
     TOOLS_DISCOVERED,
 )
@@ -309,6 +310,7 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                 # in order reconstructs the final history without a second
                 # pass over the graph.
                 final_history = list(history)
+                pending_answer = None
                 async for chunk in build_graph(registry, get_provider(escalate)).astream(state):
                     for node, update in chunk.items():
                         messages = update.get("messages") or []
@@ -327,8 +329,30 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                                         arguments=call["arguments"],
                                     )
                             else:
-                                outcome = "answered"
-                                yield _sse("answer", content=message.get("content", ""))
+                                # HELD, not emitted. The router has not run yet,
+                                # so this may still turn out to be a narrated
+                                # tool call that the loop is about to nudge -
+                                # and emitting it now would show the page a
+                                # wrong answer, then a nudge, then the real one.
+                                # Flushed below once the run is genuinely over.
+                                pending_answer = message.get("content", "")
+
+                        elif node == "nudge":
+                            # Surfaced rather than done silently. The page
+                            # would otherwise show an unexplained pause and a
+                            # second round of thinking, and "the system did
+                            # something you cannot see" is the habit this
+                            # project keeps having to break.
+                            # The held answer was the narration. Drop it.
+                            pending_answer = None
+                            NUDGES.inc()
+                            yield _sse(
+                                "nudge",
+                                message=(
+                                    "the model described a tool call without making "
+                                    "one - asking it again"
+                                ),
+                            )
 
                         elif node == "truncate":
                             # A separate event, not an answer. The run ended
@@ -349,6 +373,10 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                 logger.exception("run failed")
                 yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
                 return
+
+            if pending_answer is not None:
+                outcome = "answered"
+                yield _sse("answer", content=pending_answer)
 
             if session_id:
                 _sessions.save(session_id, final_history)
