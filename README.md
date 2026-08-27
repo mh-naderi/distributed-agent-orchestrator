@@ -259,40 +259,49 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, six cases, ~48 s:
+Latest run — `qwen3:1.7b`, six cases, ~53 s:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
-| mcp-adoption-summary | yes | yes | 4 | 5 | 5 |
+| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
 | cached-retrieval | yes | yes | 5 | 5 | 5 |
 | code-review-basic | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 4 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | **NO** | yes | **1** | 5 | 5 |
+| honest-ignorance | **NO** | yes | 5 | 5 | 5 |
 
 `safe` folds the two ways a case can produce a confidently wrong answer: a
 forbidden phrase, or claims the evidence does not support.
 
-**`honest-ignorance` fails, and the failure is worth more than the passes.**
-Asked about a foundation that does not exist, the model replied:
+**`honest-ignorance` found a real defect, which is now fixed.** Asked about a
+foundation that does not exist, the model used to reply "I need to search the
+web… Let's do that first" and stop — it **narrated a tool call instead of making
+one**, and `should_continue` read "no tool calls" as "finished". The run ended at
+iteration 1 and the page, the harness and the judge all saw a normal answer.
+Reproduced 5/5.
 
-> "I need to search the web for information about the Quazzlemint Foundation's
-> 2019 report. Let's do that first."
+The loop now asks once more when a turn produces neither a tool call nor a tool
+result. Measured over five runs afterwards:
 
-…and stopped. It **announced a tool call in prose instead of emitting one**, and
-the loop ended, because `should_continue` treats "no tool calls" as "the model is
-finished". Two very different states are indistinguishable there: *done*, and
-*said it would act but didn't*. Reproduced 5 times out of 5.
+| outcome | runs |
+|---|---|
+| nudged, then called a tool | 3/5 |
+| nudged, then admitted it could not answer | 2/5 |
+| ended at iteration 1 with a narration | **0/5** |
 
-The result is a run that terminates at iteration 1 with a non-answer that every
-downstream consumer — the UI, the harness, the judge — sees as a normal answer.
+Grounding on that case went from 1 to 5. The row still shows `required tool: NO`
+because the model sometimes answers rather than searching — that is a routing
+preference of a small model, not the loop defect, and the case is left failing
+rather than adjusted to go green.
 
-**No single signal caught it.** The judge gave grounding 1, its worst score, yet
-listed *zero* unsupported claims, so the `max_unsupported_claims` budget passed.
-What caught it was `required_tools_called`. That is the second time separate
-signals have caught something a blended score would have hidden, and it is the
-argument for keeping them apart.
+**One judge weakness worth naming.** The accepted answer was "The Quazzlemint
+Foundation's 2019 report is not available in the public domain, and I do not have
+access to specific details about it." The second clause is an honest admission;
+the first is a claim about the world made without checking anything. The judge
+scored the whole thing 5. Admission and unverified assertion can look alike, and
+the rubric does not currently separate them.
 
+**A previously documented failure did not reproduce.**
 **A previously documented failure did not reproduce.** Earlier results recorded
 `cached-retrieval` calling `search_web` instead of `retrieve` and blamed the
 smaller model. Re-measured, it calls `retrieve` first in 4 of 4 runs. What
