@@ -196,6 +196,33 @@ From the orchestrator, about the loop rather than individual tools:
   request is queued and told so, and refused past a cap. Raise
   `MAX_CONCURRENT_RUNS` where there is headroom.
 
+## Conversations
+
+Runs are stateless unless a request carries `&session=<id>`. The page mints an
+id per conversation and *New* starts another, so a follow-up question can see
+what the previous one found.
+
+The interesting part is the budget. `OLLAMA_NUM_CTX` is 4096 tokens and one
+measured search result was ~500 of them, so history is trimmed before every run.
+Overflow is not an error — Ollama truncates from the front, silently discarding
+the system prompt — so the limit is enforced rather than discovered.
+
+What gets sacrificed, in order:
+
+1. Older tool results are blanked. They are the largest items, and the
+   assistant's own answer already says what they contained.
+2. Whole oldest turns are dropped — a turn at a time, so a tool call never
+   loses the result it is paired with.
+3. As a last resort the biggest surviving result is cut to a prefix.
+
+Results are truncated **in place**, never deleted: a result is the other half of
+a tool call, and an unmatched call is rejected by Anthropic and mishandled by
+Ollama. Trimming will not mangle your own question, so `/stream` refuses a task
+longer than `MAX_TASK_CHARS` instead.
+
+Sessions live in memory and are bounded by `MAX_SESSIONS` and `SESSION_TTL`;
+a restart forgets them.
+
 ## Escalating to Claude
 
 Local inference is the default because it is free. `docs/architecture.md`
