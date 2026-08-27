@@ -160,10 +160,24 @@ class Session:
     """One conversation. `messages` is the graph's neutral history format."""
 
     messages: list[dict] = field(default_factory=list)
-    last_used: float = field(default_factory=time.monotonic)
 
-    def touch(self) -> None:
+    # Two different clocks, because they answer two different questions.
+    #
+    # last_used is wall time and is only used for expiry, where a comparison
+    # against an hour-long TTL does not care about milliseconds.
+    #
+    # rank is a monotonically increasing counter and is what ORDERS sessions
+    # for eviction. It exists because time.monotonic() on Windows has roughly
+    # 15ms resolution: several sessions touched inside one tick share an
+    # identical timestamp, and min() then picks between them arbitrarily - so
+    # a busy store could evict the session that was just used. A counter has
+    # no resolution to run out of.
+    last_used: float = field(default_factory=time.monotonic)
+    rank: int = 0
+
+    def touch(self, rank: int) -> None:
         self.last_used = time.monotonic()
+        self.rank = rank
 
 
 class SessionStore:
@@ -184,6 +198,7 @@ class SessionStore:
         self._sessions: dict[str, Session] = {}
         self._max = max_sessions
         self._ttl = ttl
+        self._clock = 0
 
     def __len__(self) -> int:
         return len(self._sessions)
@@ -199,7 +214,7 @@ class SessionStore:
             del self._sessions[key]
 
         while len(self._sessions) > self._max:
-            oldest = min(self._sessions, key=lambda k: self._sessions[k].last_used)
+            oldest = min(self._sessions, key=lambda k: self._sessions[k].rank)
             del self._sessions[oldest]
             logger.info("session store full; evicted the least recently used")
 
@@ -209,7 +224,8 @@ class SessionStore:
             session = Session()
             self._sessions[session_id] = session
             self._evict()
-        session.touch()
+        self._clock += 1
+        session.touch(self._clock)
         return session
 
     def save(self, session_id: str, messages: list[dict]) -> None:

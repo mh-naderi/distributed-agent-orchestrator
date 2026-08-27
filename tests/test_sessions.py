@@ -185,19 +185,25 @@ def test_the_store_is_bounded():
     store = SessionStore(max_sessions=3)
     for i in range(10):
         store.get(f"session-{i}")
-        time.sleep(0.001)  # keep last_used ordering unambiguous
 
     assert len(store) <= 3
 
 
 def test_the_least_recently_used_session_is_evicted_first():
+    """
+    No sleeps, because ordering must not depend on the clock.
+
+    This test used to space its calls with time.sleep(0.01) and failed about
+    half the time: time.monotonic() has roughly 15ms resolution on Windows, so
+    several sessions touched inside one tick shared a timestamp and min() chose
+    between them arbitrarily. That was a real defect, not a slow test - a busy
+    store could evict the session it had just served. Eviction now orders by a
+    counter, which has no resolution to run out of.
+    """
     store = SessionStore(max_sessions=2)
     store.save("keep-me", [SYSTEM])
-    time.sleep(0.01)
     store.save("old", [SYSTEM])
-    time.sleep(0.01)
     store.get("keep-me")          # touch it so "old" is now the stale one
-    time.sleep(0.01)
     store.get("new")              # forces an eviction
 
     assert store.get("keep-me").messages == [SYSTEM]
