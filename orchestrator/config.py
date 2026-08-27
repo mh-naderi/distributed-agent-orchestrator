@@ -153,6 +153,40 @@ OLLAMA_NUM_GPU = int(_num_gpu) if _num_gpu else None
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "2m")
 
 
+# ---------------------------------------------------------------------------
+# Conversation history
+# ---------------------------------------------------------------------------
+# How much of the context window history may occupy, as a fraction. The rest
+# is left for the model's own output and for the fact that history is measured
+# in CHARACTERS rather than tokens - a proxy that has to be wrong in the safe
+# direction. Overflow is not an error in Ollama: it truncates from the front,
+# which would silently discard the system prompt.
+HISTORY_BUDGET_FRACTION = float(os.environ.get("HISTORY_BUDGET_FRACTION", "0.5"))
+
+# Conversations are held in memory and bounded by both count and age. The key
+# is chosen by the client, so an unbounded store would be a memory leak with a
+# public entry point.
+# The longest question accepted. History trimming deliberately never mangles a
+# user's own words, so the bound on them has to be applied at the door.
+MAX_TASK_CHARS = int(os.environ.get("MAX_TASK_CHARS", "4000"))
+
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "50"))
+SESSION_TTL = float(os.environ.get("SESSION_TTL", "3600"))
+
+
+def history_budget_chars() -> int:
+    """
+    The character budget for one conversation history.
+
+    Roughly four characters per token is the usual rule of thumb, and the
+    fraction above then holds history to half the window. Both numbers are
+    deliberately conservative: being wrong here means silent truncation, and
+    the cost of being too cautious is only that an older turn is dropped
+    sooner than it strictly had to be.
+    """
+    return int(OLLAMA_NUM_CTX * 4 * HISTORY_BUDGET_FRACTION)
+
+
 def ollama_options() -> dict:
     """Runtime options shared by every Ollama call in this project."""
     options = {"num_ctx": OLLAMA_NUM_CTX}

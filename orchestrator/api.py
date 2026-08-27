@@ -40,6 +40,7 @@ from starlette.routing import Route
 from orchestrator.config import (
     AGENT_URLS,
     MAX_CONCURRENT_RUNS,
+    MAX_TASK_CHARS,
     MAX_QUEUED_RUNS,
     MCP_DISCOVERY_TTL,
     OLLAMA_MODEL,
@@ -47,6 +48,7 @@ from orchestrator.config import (
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
+from orchestrator.sessions import SessionStore
 from orchestrator.metrics import (
     DISCOVERY_FAILURES,
     METRICS_PORT,
@@ -218,6 +220,8 @@ class _RunLimiter:
 
 _run_limiter = _RunLimiter()
 
+_sessions = SessionStore()
+
 
 def _sse(event: str, **payload) -> dict:
     """
@@ -231,7 +235,7 @@ def _sse(event: str, **payload) -> dict:
     return {"event": event, "data": json.dumps(payload)}
 
 
-async def _run(task: str, escalate: bool = False):
+async def _run(task: str, escalate: bool = False, session_id: str | None = None):
     """
     Drive the graph and translate each step into an event.
 
@@ -287,18 +291,28 @@ async def _run(task: str, escalate: bool = False):
 
         await _run_limiter.acquire()
         try:
-            state = {
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": task},
-                ],
-                "iterations": 0,
-            }
+            # A session carries prior turns in; without one every run starts
+            # from an empty history, which is what made follow-up questions
+            # impossible. The history is already trimmed when it was saved.
+            prior = _sessions.get(session_id).messages if session_id else []
+            history = (
+                list(prior)
+                if prior
+                else [{"role": "system", "content": SYSTEM_PROMPT}]
+            )
+            history.append({"role": "user", "content": task})
+
+            state = {"messages": history, "iterations": 0}
 
             try:
+                # The reducer on messages is append, so replaying the updates
+                # in order reconstructs the final history without a second
+                # pass over the graph.
+                final_history = list(history)
                 async for chunk in build_graph(registry, get_provider(escalate)).astream(state):
                     for node, update in chunk.items():
                         messages = update.get("messages") or []
+                        final_history.extend(messages)
                         if update.get("iterations") is not None:
                             iterations = update["iterations"]
 
@@ -336,6 +350,9 @@ async def _run(task: str, escalate: bool = False):
                 yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
                 return
 
+            if session_id:
+                _sessions.save(session_id, final_history)
+
             yield _sse("done")
         finally:
             # Released on every path, including the client disconnecting
@@ -356,10 +373,25 @@ async def stream(request):
     if not task:
         return JSONResponse({"error": "missing ?task="}, status_code=400)
 
+    # The one part of a history that is unbounded and client-supplied.
+    # sessions.trim will not mangle a user's own question - correctly, since
+    # the question is the whole request - so the limit has to be applied where
+    # the text arrives. Without it a single enormous task could exceed the
+    # context window on its own, and Ollama answers that by truncating from the
+    # front and silently discarding the system prompt.
+    if len(task) > MAX_TASK_CHARS:
+        return JSONResponse(
+            {"error": f"task is longer than {MAX_TASK_CHARS} characters"},
+            status_code=413,
+        )
+
     # Escalation is opt-in per request rather than a heuristic. See
     # get_provider for why there is no automatic rule yet.
     escalate = request.query_params.get("escalate", "").lower() in ("1", "true", "yes", "on")
-    return EventSourceResponse(_run(task, escalate=escalate))
+    # Optional: without it each request is a fresh conversation, which is the
+    # previous behaviour and still the right one for a one-off question.
+    session_id = request.query_params.get("session") or None
+    return EventSourceResponse(_run(task, escalate=escalate, session_id=session_id))
 
 
 @asynccontextmanager

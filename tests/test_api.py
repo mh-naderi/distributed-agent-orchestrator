@@ -38,6 +38,14 @@ async def collect(task: str) -> list[tuple[str, dict]]:
     ]
 
 
+async def collect_session(task: str, session_id: str) -> list[tuple[str, dict]]:
+    """Drive _run with a session so history carries between calls."""
+    return [
+        (frame["event"], json.loads(frame["data"]))
+        async for frame in api._run(task, session_id=session_id)
+    ]
+
+
 @pytest.fixture(autouse=True)
 def clean_registry_cache():
     """
@@ -50,9 +58,11 @@ def clean_registry_cache():
     """
     api._registry_cache.clear()
     api._run_limiter.reset()
+    api._sessions.clear()
     yield
     api._registry_cache.clear()
     api._run_limiter.reset()
+    api._sessions.clear()
 
 
 @pytest.fixture
@@ -446,3 +456,90 @@ async def test_the_slot_is_released_when_a_client_disconnects(monkeypatch):
     await stream.aclose()         # client goes away
 
     assert not api._run_limiter.would_wait(), "the slot was never given back"
+
+
+# ---------------------------------------------------------------------------
+# Sessions: a follow-up can see the previous turn
+# ---------------------------------------------------------------------------
+
+
+async def test_without_a_session_each_run_starts_fresh(wire):
+    """The previous behaviour, and still right for a one-off question."""
+    provider = ScriptedProvider([LLMResponse(content="one"), LLMResponse(content="two")])
+    wire(provider)
+
+    await collect("first question")
+    await collect("second question")
+
+    second_turn = provider.seen[1]
+    assert [m["content"] for m in second_turn if m["role"] == "user"] == ["second question"]
+
+
+async def test_a_session_carries_the_previous_turn_into_the_next(wire):
+    """
+    The point of the feature: "now summarise that" needs something to refer to.
+    """
+    provider = ScriptedProvider([LLMResponse(content="MCP is a protocol."), LLMResponse(content="ok")])
+    wire(provider)
+
+    await collect_session("what is MCP?", "sess-1")
+    await collect_session("summarise that", "sess-1")
+
+    second_turn = provider.seen[1]
+    questions = [m["content"] for m in second_turn if m["role"] == "user"]
+    answers = [m["content"] for m in second_turn if m["role"] == "assistant"]
+
+    assert questions == ["what is MCP?", "summarise that"]
+    assert "MCP is a protocol." in answers
+
+
+async def test_separate_sessions_do_not_leak_into_each_other(wire):
+    provider = ScriptedProvider(
+        [LLMResponse(content="a1"), LLMResponse(content="b1"), LLMResponse(content="b2")]
+    )
+    wire(provider)
+
+    await collect_session("question A", "sess-a")
+    await collect_session("question B", "sess-b")
+
+    turn_for_b = provider.seen[1]
+    assert "question A" not in [m.get("content") for m in turn_for_b]
+
+
+async def test_the_system_prompt_is_not_duplicated_on_a_follow_up(wire):
+    """A second copy is wasted context in a window this small."""
+    provider = ScriptedProvider([LLMResponse(content="one"), LLMResponse(content="two")])
+    wire(provider)
+
+    await collect_session("first", "sess-2")
+    await collect_session("second", "sess-2")
+
+    second_turn = provider.seen[1]
+    assert sum(1 for m in second_turn if m["role"] == "system") == 1
+
+
+async def test_stored_history_is_trimmed(wire):
+    """
+    Enforced on the way IN to the store, not on the way out - otherwise the
+    budget is applied one run too late, after the oversized prompt was sent.
+    """
+    from orchestrator.config import history_budget_chars
+    from orchestrator.sessions import estimate_chars
+
+    # Large TOOL output, which is what actually dominates a real history and
+    # what trimming is designed to control. A huge assistant answer is a
+    # different case: trim will not mangle the model's own text, and says so
+    # in a warning rather than pretending it fitted.
+    registry = DiscoverableRegistry(results={"search_web": "x" * 20000})
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "search_web", {"query": "q"})]),
+            LLMResponse(content="short answer"),
+        ]
+    )
+    wire(provider, registry)
+
+    await collect_session("first", "sess-3")
+
+    stored = api._sessions.get("sess-3").messages
+    assert estimate_chars(stored) <= history_budget_chars()
