@@ -26,6 +26,27 @@
 #     kind create cluster --name agent-orchestrator --config k8s/kind-cluster.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+
+networking:
+  # PINNED, and this is not cosmetic. Left unset, kind asks the OS for an
+  # ephemeral port for the API server and bakes it into the container at
+  # creation. Windows reserves large TCP blocks and REDRAWS THEM ON BOOT, so a
+  # port that was free at creation can become unbindable overnight - and a
+  # container port mapping cannot be changed after the fact. The cluster then
+  # refuses to start at all:
+  #
+  #     bind: An attempt was made to access a socket in a way forbidden by
+  #     its access permissions
+  #
+  # That is exactly what happened: kind had picked 4863, which a reboot placed
+  # inside the reserved range 4856-4955, and the only way back was to recreate
+  # the cluster. Pinning does not make the port immune - nothing is - but it
+  # turns a random overnight failure into a known value that can be checked
+  # before creation and changed here in one place:
+  #
+  #     netsh interface ipv4 show excludedportrange protocol=tcp
+  apiServerPort: 18443
+
 nodes:
   - role: control-plane
     extraPortMappings:

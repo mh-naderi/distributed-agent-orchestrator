@@ -144,7 +144,34 @@ This has hit the project twice with different ports:
   18000-18002 locally. Kubernetes is unaffected: each pod has its own network
   namespace, so the manifests keep 8000.
 - **11434, Ollama's own default**, fell inside 11359-11458 after a reboot.
-  Ollama could not bind its own port.
+  Ollama could not bind its own port. (Later freed again - the ranges move
+  both ways, so check rather than assume.)
+- **4863, the kind API server port**, fell inside 4856-4955 overnight. This one
+  was the worst of the three, because nothing chose that port: kind asked the
+  OS for an ephemeral one at creation and baked it into the container. A
+  container's port mappings cannot be changed afterwards, so the cluster simply
+  refused to start:
+
+  ```
+  bind: An attempt was made to access a socket in a way forbidden by its
+  access permissions
+  ```
+
+  `kind-cluster.yaml` now pins `networking.apiServerPort`, which does not make
+  the port immune but does make it a known value you can check before creating
+  the cluster and change in one place.
+
+  **Recovering data from a cluster that will not start:** `docker cp` works on
+  a stopped container, so the PVC can be rescued without starting anything:
+
+  ```bash
+  docker cp agent-orchestrator-control-plane:/var/local-path-provisioner data/rescue/
+  ```
+
+  The retrieval index is at
+  `data/rescue/local-path-provisioner/pvc-*_default_index-retrieval-agent-0/retrieval.db`
+  and restores into a fresh cluster with the same `kubectl exec` pipe used for
+  any other backup.
 
 Check the current ranges:
 
