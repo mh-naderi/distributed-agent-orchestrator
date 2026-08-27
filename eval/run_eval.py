@@ -58,11 +58,22 @@ def check_automated_signals(case: dict, output: str, tools_called: list[str]) ->
     called = set(tools_called)
     required = set(case.get("required_tools", []))
     allowed = set(case.get("allowed_tools", []))
+    lowered = output.lower()
+
+    # must_not_contain exists because the failure this project keeps hitting is
+    # not a missing word, it is a confidently WRONG one. The stub answered "No
+    # issues were found in the provided code" about a function with an
+    # unguarded division, and every keyword check of the day passed.
+    forbidden = [
+        phrase for phrase in case.get("must_not_contain", [])
+        if phrase.lower() in lowered
+    ]
 
     return {
-        "keyword_match": all(kw.lower() in output.lower() for kw in case["must_contain"]),
+        "keyword_match": all(kw.lower() in lowered for kw in case["must_contain"]),
         "required_tools_called": required.issubset(called),
         "unexpected_tools": sorted(called - required - allowed),
+        "forbidden_phrases": forbidden,
     }
 
 
@@ -127,6 +138,14 @@ def run_case(case: dict) -> dict:
     automated = check_automated_signals(case, trace.answer, trace.tools_called)
     scores = judge(case["task"], trace.answer, trace.tool_outputs)
 
+    # The judge already produces the most valuable output in this harness - the
+    # list of claims the evidence does not support - and it was advisory only.
+    # A case may now assert a ceiling on it, which is what turns "the model
+    # invented something" from a note in the JSON into a failing case.
+    ceiling = case.get("max_unsupported_claims")
+    claims = scores.get("unsupported_claims") or []
+    within_claim_budget = None if ceiling is None else len(claims) <= ceiling
+
     return {
         "id": case["id"],
         "seeded": seeded,
@@ -134,6 +153,7 @@ def run_case(case: dict) -> dict:
         "iterations": trace.iterations,
         "tools_called": trace.tools_called,
         **automated,
+        "within_claim_budget": within_claim_budget,
         "grounding": scores["grounding"],
         "completeness": scores["completeness"],
         "relevance": scores["relevance"],
@@ -153,17 +173,21 @@ def _fmt(value) -> str:
 
 
 def print_table(results: list[dict]) -> None:
-    header = f"{'case':<24} {'req':<5} {'kw':<5} {'grnd':<5} {'comp':<5} {'relv':<5} {'iters':<6} {'secs':<6} tools"
+    header = f"{'case':<28} {'req':<5} {'kw':<5} {'safe':<5} {'grnd':<5} {'comp':<5} {'relv':<5} {'iters':<6} {'secs':<6} tools"
     print("\n" + header)
     print("-" * len(header))
     for r in results:
         if "error" in r:
             print(f"{r['id']:<24} ERROR: {r['error'][:70]}")
             continue
+        # "safe" folds the two ways a case can produce a confidently wrong
+        # answer: a forbidden phrase, or claims the evidence does not support.
+        safe = not r.get("forbidden_phrases") and r.get("within_claim_budget") is not False
         print(
-            f"{r['id']:<24} "
+            f"{r['id']:<28} "
             f"{_fmt(r['required_tools_called']):<5} "
             f"{_fmt(r['keyword_match']):<5} "
+            f"{_fmt(safe):<5} "
             f"{_fmt(r['grounding']):<5} "
             f"{_fmt(r['completeness']):<5} "
             f"{_fmt(r['relevance']):<5} "
@@ -177,6 +201,17 @@ def print_table(results: list[dict]) -> None:
         print()
         for metric in ("grounding", "completeness", "relevance"):
             print(f"  mean {metric}: {statistics.mean(r[metric] for r in scored):.1f} / 5")
+    forbidden = [
+        (r["id"], phrase)
+        for r in results
+        for phrase in r.get("forbidden_phrases", [])
+    ]
+    if forbidden:
+        print()
+        print(f"  FORBIDDEN PHRASES ({len(forbidden)}):")
+        for case_id, phrase in forbidden:
+            print(f"    - {case_id}: {phrase!r}")
+
     flagged = [c for r in results for c in r.get("unsupported_claims", [])]
     if flagged:
         print(f"\n  unsupported claims flagged ({len(flagged)}):")

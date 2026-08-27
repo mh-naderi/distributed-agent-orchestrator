@@ -127,3 +127,84 @@ def test_the_retrieval_case_seeds_what_it_asks_about():
         assert keyword.lower() in seeded, (
             f"the case requires {keyword!r} in the answer but never seeds it"
         )
+
+
+# ---------------------------------------------------------------------------
+# The signals that catch a confidently wrong answer
+# ---------------------------------------------------------------------------
+
+
+def test_a_forbidden_phrase_is_reported():
+    """
+    The regression guard. "No issues were found in the provided code" was a
+    fluent, confident, wrong answer that every signal of the day passed.
+    """
+    case = {"must_contain": [], "must_not_contain": ["no issues were found"]}
+
+    signals = run_eval.check_automated_signals(
+        case, "No issues were found in the provided code.", ["analyze_code"]
+    )
+
+    assert signals["forbidden_phrases"] == ["no issues were found"]
+
+
+def test_forbidden_matching_ignores_case():
+    case = {"must_contain": [], "must_not_contain": ["NO ISSUES"]}
+
+    signals = run_eval.check_automated_signals(case, "no issues here", [])
+
+    assert signals["forbidden_phrases"] == ["NO ISSUES"]
+
+
+def test_a_clean_answer_has_no_forbidden_phrases():
+    case = {"must_contain": ["zero"], "must_not_contain": ["no issues found"]}
+
+    signals = run_eval.check_automated_signals(
+        case, "It divides by b without checking for zero.", ["analyze_code"]
+    )
+
+    assert signals["forbidden_phrases"] == []
+    assert signals["keyword_match"] is True
+
+
+def test_cases_without_the_key_are_unaffected():
+    """Existing cases must keep working untouched."""
+    signals = run_eval.check_automated_signals(
+        {"must_contain": []}, "anything at all", []
+    )
+
+    assert signals["forbidden_phrases"] == []
+
+
+# ---------------------------------------------------------------------------
+# The case definitions
+# ---------------------------------------------------------------------------
+
+
+def test_the_regression_case_forbids_the_sentence_that_caused_it():
+    cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+    case = next(c for c in cases if c["id"] == "code-review-finds-a-real-bug")
+
+    forbidden = " ".join(case["must_not_contain"]).lower()
+    assert "no issues" in forbidden, (
+        "the case meant to guard the false-negative regression does not forbid it"
+    )
+
+
+def test_the_ignorance_case_budgets_unsupported_claims():
+    """
+    Grounding cannot discriminate here - the rubric scores honest ignorance as
+    a 5 - so without a claim budget this case would measure nothing.
+    """
+    cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+    case = next(c for c in cases if c["id"] == "honest-ignorance")
+
+    assert case.get("max_unsupported_claims") == 0
+
+
+def test_every_case_declares_why_it_exists():
+    """A case whose purpose is not written down cannot be judged stale later."""
+    cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+
+    missing = [c["id"] for c in cases if not c.get("why")]
+    assert missing == [], f"cases without a stated purpose: {missing}"

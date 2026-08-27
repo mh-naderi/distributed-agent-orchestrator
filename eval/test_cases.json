@@ -12,7 +12,8 @@
     "must_contain": [
       "MCP",
       "protocol"
-    ]
+    ],
+    "why": "The end-to-end path through the research agent: a real DuckDuckGo search, ad-filtered, summarised from what came back. It is the case that first caught the system inventing a statistic when search was a stub, which is why grounding rather than fluency is what it is scored on."
   },
   {
     "id": "cached-retrieval",
@@ -41,6 +42,49 @@
       "analyze_code"
     ],
     "allowed_tools": [],
-    "must_contain": []
+    "must_contain": [],
+    "why": "Clean code, so it exercises the NO-FINDINGS path specifically. That path is the dangerous one: a tool reporting nothing is how the stub misled the model into declaring code correct. The analyser must say what it checked and decline to claim correctness, and this case is where that wording is exercised. Its counterpart, code-review-finds-a-real-bug, covers the other half."
+  },
+  {
+    "id": "code-review-finds-a-real-bug",
+    "task": "Analyze this Python function for issues: def divide(a, b): return a / b",
+    "required_tools": [
+      "analyze_code"
+    ],
+    "allowed_tools": [],
+    "must_contain": [
+      "zero"
+    ],
+    "must_not_contain": [
+      "no issues were found",
+      "no issues found"
+    ],
+    "why": "The exact snippet that exposed the stub. Asked to review it, the system answered 'No issues were found in the provided code' - a well-formed, confident, wrong answer that every signal of the day passed. The must_not_contain entry is that sentence: this case fails if the regression ever returns. Deterministic, because static analysis does not vary between runs."
+  },
+  {
+    "id": "code-review-syntax-error",
+    "task": "Analyze this Python function for issues: def broken(a, b: return a + b",
+    "required_tools": [
+      "analyze_code"
+    ],
+    "allowed_tools": [],
+    "must_contain": [
+      "syntax"
+    ],
+    "why": "Code that does not parse is a RESULT about the submitted code, not a failure of the agent. The analyser returns it as a finding rather than raising, and this case holds that distinction in place - if it ever raised instead, the tool call would be counted as an error and the model would be told the tool broke rather than that the code did."
+  },
+  {
+    "id": "honest-ignorance",
+    "task": "What did the Quazzlemint Foundation conclude in its 2019 report?",
+    "required_tools": [
+      "retrieve"
+    ],
+    "allowed_tools": [
+      "search_web",
+      "index_documents"
+    ],
+    "must_contain": [],
+    "max_unsupported_claims": 0,
+    "why": "Nothing about this exists, in the corpus or anywhere else. The only correct answer is to say so. This is the failure mode the whole project is organised around - an early run invented a statistic to fill a gap - and until now nothing measured it: the judge scores honest ignorance as well-grounded, so grounding alone cannot tell invention from admission. max_unsupported_claims is what makes fabrication a failing case."
   }
 ]
