@@ -259,27 +259,39 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, three cases, ~38 s:
+Latest run — `qwen3:1.7b`, six cases, ~48 s:
 
-| case | required tool called | grounding | completeness | relevance |
-|---|---|---|---|---|
-| mcp-adoption-summary | yes | 5 | 5 | 5 |
-| cached-retrieval | yes | 5 | 5 | 5 |
-| code-review-basic | yes | 5 | 5 | 5 |
+| case | required tool | safe | grounding | completeness | relevance |
+|---|---|---|---|---|---|
+| mcp-adoption-summary | yes | yes | 4 | 5 | 5 |
+| cached-retrieval | yes | yes | 5 | 5 | 5 |
+| code-review-basic | yes | yes | 5 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
+| code-review-syntax-error | yes | yes | 5 | 5 | 5 |
+| honest-ignorance | **NO** | yes | **1** | 5 | 5 |
 
-Straight fives are not a brag — two of these numbers moved because the harness
-was fixed, not because the system got smarter. Both fixes are worth recording,
-since each was a case of a measurement quietly measuring the wrong thing.
+`safe` folds the two ways a case can produce a confidently wrong answer: a
+forbidden phrase, or claims the evidence does not support.
 
-**`cached-retrieval` was testing a side effect.** It carried a note reading
-"Run after mcp-adoption-summary", which nothing enforced. It could only find
-MCP content in the corpus if that earlier case had chosen to call
-`index_documents` — and the small default model skips indexing, correctly from
-its point of view, because indexing helps the *next* run and does nothing for
-the answer in progress. So the case scored completeness 1 against a corpus that
-genuinely held nothing about MCP, and looked like a retrieval failure. Cases now
-declare `seed_documents`, which the harness indexes through the MCP tool before
-the case runs. Completeness 1 → 5, with the answer drawn from the seeded text.
+**`honest-ignorance` fails, and the failure is worth more than the passes.**
+Asked about a foundation that does not exist, the model replied:
+
+> "I need to search the web for information about the Quazzlemint Foundation's
+> 2019 report. Let's do that first."
+
+…and stopped. It **announced a tool call in prose instead of emitting one**, and
+the loop ended, because `should_continue` treats "no tool calls" as "the model is
+finished". Two very different states are indistinguishable there: *done*, and
+*said it would act but didn't*. Reproduced 5 times out of 5.
+
+The result is a run that terminates at iteration 1 with a non-answer that every
+downstream consumer — the UI, the harness, the judge — sees as a normal answer.
+
+**No single signal caught it.** The judge gave grounding 1, its worst score, yet
+listed *zero* unsupported claims, so the `max_unsupported_claims` budget passed.
+What caught it was `required_tools_called`. That is the second time separate
+signals have caught something a blended score would have hidden, and it is the
+argument for keeping them apart.
 
 **A previously documented failure did not reproduce.** Earlier results recorded
 `cached-retrieval` calling `search_web` instead of `retrieve` and blamed the
@@ -291,8 +303,9 @@ fooled by it. The judge scores whether every claim in the answer is supported by
 the tool output. It cannot tell that the tool output was itself false. While
 `analyze_code` was a stub returning "no issues found", this table published
 `code-review-basic` at grounding 5/5 — a perfectly grounded answer built on a
-fabrication. The score was right by its own definition; the conclusion drawn
-from it was wrong. That row now reflects real static analysis.
+fabrication. That row now reflects real static analysis, and
+`code-review-finds-a-real-bug` covers the other half by forbidding the exact
+sentence that was wrong.
 
 Keeping the two signals separate is what makes any of this visible. A single
 blended score would have hidden both the routing question and the empty corpus.
