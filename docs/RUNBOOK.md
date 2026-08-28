@@ -94,20 +94,21 @@ OLLAMA_HOST=127.0.0.1:11500 ollama serve
 
 ### Reaching things
 
-The orchestrator UI needs no port-forward. Open:
-
-    http://localhost:18080
-
-Everything else is still ClusterIP. Port-forward only what you need, onto the
-same ports the host-process config already defaults to:
+Install the ingress controller once per cluster (it is not applied by
+`kubectl apply -f k8s/`, which is non-recursive on purpose - its admission Jobs
+are immutable and would fail on every re-apply):
 
 ```bash
-kubectl port-forward service/grafana-service    13000:3000
-kubectl port-forward service/prometheus-service 19090:9090
+kubectl apply -f k8s/ingress-nginx/deploy.yaml
 ```
 
-The three agent forwards are only needed to drive the agents *from the host* -
-running the CLI, or the eval harness, against pods:
+Everything a human opens is then behind one entry point, with no tunnels:
+
+    http://localhost:18080            the orchestrator UI
+    http://localhost:18080/grafana/   Grafana
+
+Port-forwards are now only needed to drive the agents *from the host* - the CLI,
+the test suite's integration cases, or the eval harness against pods:
 
 ```bash
 kubectl port-forward service/research-agent-service      18000:8000

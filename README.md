@@ -136,13 +136,22 @@ kind load docker-image agent-orchestrator/research-agent:latest --name agent-orc
 kubectl apply -f k8s/
 ```
 
-The orchestrator runs **inside** the cluster and reaches the agents by their
-Service DNS names, so the UI needs no tunnel:
+Install the ingress controller once per cluster — it is deliberately outside
+`k8s/`, because `kubectl apply -f k8s/` is non-recursive and its admission Jobs
+are immutable on re-apply:
 
-    http://localhost:18080
+```bash
+kubectl apply -f k8s/ingress-nginx/deploy.yaml
+```
 
-Everything else is `ClusterIP`. Port-forward only what you need — Grafana,
-Prometheus, or an agent you want to drive from the host:
+Everything a human opens is then behind **one** entry point, no tunnels:
+
+    http://localhost:18080            the orchestrator UI
+    http://localhost:18080/grafana/   Grafana
+
+Every service is `ClusterIP`; the ingress controller is the only thing
+published to the host. Port-forwards remain only for driving an agent *from*
+the host — the CLI, the integration tests, or the eval harness:
 
 ```bash
 kubectl port-forward service/retrieval-agent-service 18001:8000
@@ -165,11 +174,8 @@ suite is green on a fresh checkout.
 
 Prometheus and Grafana deploy with everything else.
 
-```bash
-kubectl port-forward service/grafana-service 13000:3000
-```
-
-Grafana at `localhost:13000`, datasource and dashboard already provisioned.
+Grafana is behind the ingress at `http://localhost:18080/grafana/` — no
+port-forward — with its datasource and dashboard already provisioned.
 Discovery is annotation-driven — a new component opts in with
 `prometheus.io/scrape`, no config edit. The annotated port must be **named**
 `metrics`; Prometheus selects targets by port name, so a metrics endpoint on a
