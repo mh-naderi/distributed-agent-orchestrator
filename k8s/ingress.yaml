@@ -1,0 +1,63 @@
+# One entry point in front of every service a human opens.
+#
+# WHAT THIS REPLACES. Before this, reaching anything meant either a NodePort
+# (which the orchestrator had, and nothing else could have without another host
+# mapping) or `kubectl port-forward`, one tunnel per service. The runbook records
+# what those tunnels cost: each holds a terminal, dies when its pod is replaced,
+# and - worst of all - keeps accepting TCP locally after the tunnel behind it is
+# dead, so a port check reports "up" while nothing works.
+#
+# An Ingress is a routing rule, not a process. The ingress-nginx controller is
+# the single thing published to the host, and everything else stays ClusterIP
+# and is reached by path. Adding a fourth service later means adding a rule
+# here, not another tunnel.
+#
+# WHY NOT HOST-BASED ROUTING. The usual Ingress example routes by hostname
+# (grafana.example.com), which needs DNS or hosts-file entries that would then
+# be one more undocumented step on a machine that already has enough of them.
+# Paths need nothing.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-orchestrator
+  annotations:
+    # The orchestrator streams Server-Sent Events, and nginx buffers proxied
+    # responses by default - which would hold every event until the run finished
+    # and turn a live view of the loop into a single delivery at the end. That
+    # would silently defeat the entire point of the streaming UI, so it is
+    # disabled explicitly rather than left to chance.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # A run may take minutes on local inference; the default read timeout is 60s
+    # and would cut the stream off mid-answer.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # Grafana first: paths are matched most-specific-first by the
+          # controller, but keeping the specific rule above the catch-all makes
+          # the intent legible to a person reading it.
+          #
+          # Grafana is told its own base URL through GF_SERVER_ROOT_URL and
+          # GF_SERVER_SERVE_FROM_SUB_PATH, so it generates correct links and
+          # asset paths itself. That is why there is no rewrite here: rewriting
+          # the path would strip the prefix from requests while Grafana's own
+          # HTML still pointed at it, and the page would load with no CSS.
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-service
+                port:
+                  number: 3000
+
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: orchestrator-service
+                port:
+                  number: 8080

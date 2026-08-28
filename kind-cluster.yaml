@@ -49,6 +49,16 @@ networking:
 
 nodes:
   - role: control-plane
+    # ingress-nginx will not schedule without this label, and a label applied
+    # with kubectl lives only as long as the node does. Putting it here means a
+    # rebuilt cluster is ingress-ready without anyone remembering a manual step
+    # - the same reasoning as pinning the ports above.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
     extraPortMappings:
       # Node 30080 (the orchestrator Service's nodePort) -> host 18080, the
       # same port the host-process workflow already serves the UI on, so the

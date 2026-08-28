@@ -185,6 +185,15 @@ spec:
               value: "Admin"
             - name: GF_AUTH_DISABLE_LOGIN_FORM
               value: "true"
+            # Grafana is reached at /grafana through the ingress, and it has to
+            # be TOLD that. Without these it serves correct HTML whose links and
+            # asset paths are all rooted at /, so the page loads unstyled and
+            # every navigation lands on the orchestrator instead. Telling the
+            # app its own base URL is why the ingress rule needs no rewrite.
+            - name: GF_SERVER_ROOT_URL
+              value: "http://localhost:18080/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
           resources:
             requests: { memory: "128Mi", cpu: "50m" }
             limits: { memory: "384Mi" }

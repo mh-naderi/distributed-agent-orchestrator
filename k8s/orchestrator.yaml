@@ -116,20 +116,16 @@ metadata:
   labels:
     app: orchestrator
 spec:
-  # NodePort, unlike every other Service here, because this one is the front
-  # door for a human. Paired with the extraPortMappings in k8s/kind-cluster.yaml
-  # it makes the UI reachable at http://localhost:18080 with no port-forward -
-  # and therefore nothing to silently break when a pod is replaced.
-  #
-  # The nodePort number is NOT arbitrary: it must match the containerPort in
-  # that kind config, or the tunnel from the host lands on a closed port.
-  type: NodePort
+  # ClusterIP again. This was a NodePort while it was the only thing a human
+  # needed to reach; the ingress controller now owns nodePort 30080 and routes
+  # to this Service by path, so exactly one thing is published to the host
+  # instead of one per service.
+  type: ClusterIP
   selector: { app: orchestrator }
   ports:
     - name: http
       port: 8080
       targetPort: http
-      nodePort: 30080
     # Deliberately no nodePort: metrics stay reachable inside the cluster
     # (Prometheus scrapes the pod directly) and are NOT published to the host
     # the way the UI port is.
