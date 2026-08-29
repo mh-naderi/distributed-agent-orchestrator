@@ -21,6 +21,7 @@ async worker pattern and document the before/after in the README.
 import os
 import time
 from analysis import report
+from evaluator import report as evaluate_report
 from mcp.server.fastmcp import FastMCP
 from prometheus_client import Counter, Histogram, start_http_server
 
@@ -85,6 +86,35 @@ def analyze_code(code: str) -> str:
         raise
     finally:
         TOOL_LATENCY.labels(tool_name="analyze_code").observe(time.time() - start)
+
+
+@mcp.tool()
+def evaluate_expression(expression: str) -> str:
+    """Evaluate a single Python EXPRESSION and return its value.
+
+    Use this for arithmetic and simple data questions - "what is 17 * 23",
+    "what is the sum of these numbers" - rather than working it out yourself.
+
+    This is a restricted subset, not a Python interpreter. Arithmetic,
+    comparisons, boolean logic, list/tuple/dict/set literals, indexing and a
+    dozen built-in functions are available. Imports, attribute access,
+    assignment, loops, comprehensions and function definitions are not, and
+    asking for them returns a refusal that lists what is available instead.
+    """
+    start = time.time()
+    try:
+        result = evaluate_report(expression)
+        # A refusal is a successful CALL that returns a refusal - the tool did
+        # exactly its job. Counting it as an error would make the error rate
+        # measure how often the model asks for too much, which is a different
+        # question from whether this agent is healthy.
+        TOOL_CALLS.labels(tool_name="evaluate_expression", status="success").inc()
+        return result
+    except Exception:
+        TOOL_CALLS.labels(tool_name="evaluate_expression", status="error").inc()
+        raise
+    finally:
+        TOOL_LATENCY.labels(tool_name="evaluate_expression").observe(time.time() - start)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py analysis.py .
+COPY server.py analysis.py evaluator.py .
 
 # MCP protocol port + Prometheus metrics port
 EXPOSE 8000 9102

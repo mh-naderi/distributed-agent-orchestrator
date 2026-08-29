@@ -37,6 +37,7 @@ async def test_discovers_every_agents_tools(registry):
         "index_documents",
         "retrieve",
         "analyze_code",
+        "evaluate_expression",
     }
 
 
