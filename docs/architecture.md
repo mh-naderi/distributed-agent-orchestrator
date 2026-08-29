@@ -151,6 +151,116 @@ where decoupling the listener from execution actually earns its complexity. (The
 code-analysis agent previously held this note; a sandbox is the better fit, since
 static analysis is fast.)
 
+That was written before anyone checked what containment is actually available on
+this machine. It is designed out in full below - "Design: the code execution
+sandbox, and why it is not built" - and the conclusion is that the async worker
+is justified by slow execution, and slow execution is the part this hardware
+cannot safely host.
+
+## Design: the code execution sandbox, and why it is not built
+
+The section above names a Redis-backed async worker running a code execution
+sandbox as the stretch goal. This is the design for it, written before any code,
+because the containment argument IS the feature. An execution path that runs and
+is not safe would be worse than no execution path at all, and every other agent
+here is safe by accident - they are pure functions over text and there is nothing
+to contain.
+
+### The threat model, stated plainly
+
+The code would not come from the person using this. It would come from the
+orchestrating model, which is frequently repeating something it read in a
+DuckDuckGo result. That is an untrusted input path that already exists in this
+system: `search_web` scrapes arbitrary HTML, `index_documents` stores it, and
+`retrieve` feeds it back to the model as evidence. Adding execution turns a
+prompt-injection in a search result into code that runs on the machine.
+
+What such code would be trying to do, in rough order of how much it would matter:
+
+- **Read the filesystem.** The retrieval agent's volume holds the corpus; the
+  node holds a kubeconfig with cluster-admin.
+- **Reach the network.** Pods can reach every Service, and `host.docker.internal`
+  reaches the host's loopback - which is exactly how the agents reach Ollama.
+  Egress is not blocked anywhere in this cluster.
+- **Exhaust the machine.** A fork bomb or an allocation loop on a laptop that is
+  already the binding constraint, and which has twice had the GPU driver fall
+  over under memory pressure.
+- **Escape the container.** The least likely and the most severe.
+
+### Containment options, ranked against THIS hardware
+
+Measured on this machine rather than assumed, because most of the standard
+answers turn out not to be available here.
+
+**1. A restricted AST subset - no arbitrary execution at all.** Walk the parsed
+tree and refuse anything not on a whitelist: literals, arithmetic, comparisons,
+a handful of builtins. No imports, no attribute access, no calls to anything not
+explicitly allowed, with step and wall-clock ceilings. This is not a sandbox
+around dangerous operations; it is the absence of dangerous operations. The
+code-analysis agent already parses with `ast` for exactly this kind of walk, so
+the machinery exists. Honest name: an *evaluator*, not an executor.
+
+**2. Unix resource limits in a subprocess.** `RLIMIT_AS` and `RLIMIT_CPU` were
+verified present inside the agent containers (Linux). They are NOT present on the
+Windows host - `import resource` raises `ModuleNotFoundError` there - and
+`docs/RUNBOOK.md` documents running the agents as host processes as the normal
+way to develop. So a containment scheme built on rlimits would work in the
+cluster and do NOTHING in host-process mode, while looking identical in the code.
+That asymmetry is disqualifying on its own: this project has repeatedly been bitten
+by protections that were silently weaker than they appeared, and one that depends
+on which way you happen to be running is the same failure wearing a new hat.
+
+**3. A container per execution.** The standard answer, and unavailable without
+making things worse. `/var/run/docker.sock` is not present inside a pod - checked -
+so it would have to be deliberately mounted from the host. Mounting the host's
+Docker socket into a pod is equivalent to handing that pod root on the host, which
+means the containment mechanism would be a larger hole than the thing being
+contained.
+
+**4. gVisor or Kata.** The right tool. Neither runs under kind on Docker Desktop
+on Windows, so this is not an option on this machine at all.
+
+### What the async worker buys, and what it costs
+
+It buys a real thing. MCP's request/response model is synchronous, and this
+client sets explicit timeouts of 30s at the HTTP layer and 120s for a JSON-RPC
+response. Anything slower than that has to be decoupled from the call, and
+"run this code" is the first tool here that could legitimately take minutes. That
+is a genuine architectural reason, not a resume line.
+
+The costs are concrete:
+
+- **A queue is a second stateful service.** This document argues that the
+  retrieval agent owning a durable index is what makes the multi-server split
+  load-bearing rather than decorative. Adding Redis adds a second component with
+  state, and the argument would need rewriting rather than merely extending.
+- **Memory.** The node currently declares 3078Mi of limits against a 16GB machine
+  that also runs Docker's VM and local inference. Redis plus a worker is another
+  ~300-500Mi, on the constraint that has already caused two driver crashes.
+- **The result protocol changes shape.** A tool that returns a job id and is
+  polled is a different contract from one that returns an answer, and every
+  consumer - the graph, the SSE layer, the eval harness - assumes the latter.
+
+### Recommendation
+
+Build option 1, the restricted evaluator, and call it what it is. It is
+genuinely safe because nothing dangerous is reachable, it needs no new
+infrastructure, it runs identically on Windows and in the cluster, and it can
+state its own limits the way `analyze_code` already does - which is the pattern
+this project settled on after the stub taught it that a tool implying more than
+it knows is worse than a tool that fails.
+
+Do NOT build options 2 or 3 on this hardware. Option 2 is a protection that
+evaporates in the documented development mode; option 3 trades a small risk for
+a root-equivalent one.
+
+Leave the async worker unbuilt until there is something that actually needs it.
+A restricted evaluator returns in milliseconds, so wrapping it in a queue would
+be adding a second stateful service and a new tool contract to solve a latency
+problem that does not exist. The honest version of the stretch goal is: the
+async pattern is justified by slow execution, and slow execution is the part
+this hardware cannot safely host.
+
 ## Grounding, and why the stubs had to go
 
 `search_web` initially returned a canned string. That turned out to be actively
