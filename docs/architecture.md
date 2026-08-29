@@ -22,7 +22,7 @@ The last two points used to be aspirational. They aren't anymore - see below.
 |---|---|---|---|
 | research | `search_web` | none | Deployment |
 | retrieval | `index_documents`, `retrieve` | **persistent index** | **StatefulSet + PVC** |
-| code-analysis | `analyze_code` | none | Deployment |
+| code-analysis | `analyze_code`, `evaluate_expression` | none | Deployment |
 
 ## Stateful vs stateless, and why it matters here
 
@@ -241,7 +241,12 @@ The costs are concrete:
   polled is a different contract from one that returns an answer, and every
   consumer - the graph, the SSE layer, the eval harness - assumes the latter.
 
-### Recommendation
+### Recommendation, and what was built
+
+Option 1 was built - `agents/code_analysis_agent/evaluator.py`, exposed as
+`evaluate_expression`. It is an interpreter rather than `compile()` plus
+`eval()`, because whitelisting node types and then evaluating checks the shape
+of an expression and nothing about what it does.
 
 Build option 1, the restricted evaluator, and call it what it is. It is
 genuinely safe because nothing dangerous is reachable, it needs no new

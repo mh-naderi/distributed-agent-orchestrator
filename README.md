@@ -14,7 +14,7 @@ Runs entirely locally — no cloud account, no GPU rental, no API keys.
 |---|---|---|---|
 | **research** | `search_web` | none | Deployment |
 | **retrieval** | `index_documents`, `retrieve` | vector index | StatefulSet + PVC |
-| **code-analysis** | `analyze_code` | none | Deployment |
+| **code-analysis** | `analyze_code`, `evaluate_expression` | none | Deployment |
 
 The orchestrator runs a reason → act → reason loop: ask the LLM what to do, call
 the MCP tool it picks, feed the result back, repeat until it answers or hits the
