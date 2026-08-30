@@ -135,6 +135,28 @@ data:
         },
         {
           "type": "timeseries",
+          "title": "Runs nudged (share)",
+          "description": "A SHARE rather than a count, because a raw nudge count says nothing without knowing how much traffic produced it - the same number means something different at 5 runs and at 500. This is the fraction of runs where the model described a tool call instead of making one, so it is comparable across traffic levels and is the number to watch when changing the system prompt or the model. Bounded to 0-1 because the loop nudges at most once per run. It shows nothing rather than zero when there is no traffic: with no runs the ratio is 0/0, which is undefined rather than good news - unlike the error panels, where zero errors during real traffic is a true statement worth drawing.",
+          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 28 },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+          "targets": [
+            {
+              "expr": "sum(rate(orchestrator_nudges_total[5m])) / sum(rate(orchestrator_runs_total[5m]))",
+              "legendFormat": "nudged"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Nudged runs (total)",
+          "description": "The cumulative count, which answers a question the share cannot: whether this has ever happened at all. A share of nothing and a share of zero look identical on a graph.",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+          "targets": [
+            { "expr": "sum(orchestrator_nudges_total) or vector(0)", "legendFormat": "nudged" }
+          ]
+        },
+        {
+          "type": "timeseries",
           "title": "Calls by agent",
           "description": "Per-agent attribution comes from the relabel rules in the Prometheus config, not from the agents themselves.",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
