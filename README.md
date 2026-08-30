@@ -255,6 +255,22 @@ Set `CLAUDE_MODEL` to change the model and `CLAUDE_FALLBACKS=off` to drop the
 server-side refusal fallbacks, which ride on a beta not every organisation has
 enabled.
 
+That `export` covers host-process mode. **In the cluster the orchestrator is a
+pod and does not see your shell**, so escalation there additionally needs a
+Secret and a `secretKeyRef` on the Deployment — neither of which is wired up,
+because of the next paragraph.
+
+**This path has never run against the real API.** The Anthropic API bills per
+token and needs a positive balance, and this project has a no-cloud-budget
+constraint it is not going to break for a checkmark. So the provider is written
+and its translation layer is covered by 14 tests against a fake client — the
+system prompt lifted into its own parameter, tool results batched into one
+message, thinking blocks replayed unchanged — but no request has ever left the
+machine. What *is* verified in the cluster is the guard: escalating without a
+key fails loudly rather than silently answering with the weaker model.
+
+Treat it as a designed and tested extension point, not a working feature.
+
 ## Evaluation
 
 ```bash
@@ -327,10 +343,18 @@ blended score would have hidden both the routing question and the empty corpus.
 
 ## Status
 
-Orchestration loop, all three agents, Kubernetes deployment, observability and
-the evaluation harness are working and verified.
+Working and verified against the running cluster: the orchestration loop, four
+agents' worth of tools across three services, the Kubernetes deployment,
+Prometheus and Grafana, the evaluation harness, and CI.
 
-The streaming UI runs in the cluster too, verified end to end: reachable on
-`localhost:18080` with no port-forward, resolving the agents by Service DNS,
-and answering from the retrieval corpus with the full `tools` -> `tool_call`
--> `tool_result` -> `answer` -> `done` sequence.
+Reachable behind one ingress — the UI at `localhost:18080`, Grafana at
+`/grafana/` — with no port-forwards for either. Conversations persist across
+turns within a session, history is trimmed against the context window, runs are
+serialised so two tabs cannot share one GPU, and a run that narrates a tool call
+instead of making one is asked again rather than ending on a non-answer.
+
+One thing is deliberately not verified: **the Claude escalation provider has
+never made a real API call.** It bills per token, this project runs on no cloud
+budget, and that trade was made knowingly rather than overlooked. See
+"Escalating to Claude" above for exactly what is and is not covered.
+
