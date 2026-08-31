@@ -86,7 +86,17 @@ async def test_retrieve_says_so_when_nothing_matches(registry):
 
 
 async def test_search_returns_real_results_with_sources(registry):
-    """Should return actual web content, not a stub string."""
+    """
+    Should return actual web content, not a stub string.
+
+    This one genuinely reaches DuckDuckGo, so it can fail for reasons that are
+    not a regression: ddgs scrapes HTML and rate-limits under rapid use, which
+    docs/architecture.md lists as a known gap. It failed once during a session
+    that had just driven dozens of searches through the eval harness, then
+    passed on retry and across three consecutive suite runs. Re-run before
+    investigating - and note CI never sees this, because the integration tests
+    skip there without agents.
+    """
     result = await registry.call("search_web", {"query": "Model Context Protocol"})
 
     assert "[stub" not in result
