@@ -383,6 +383,50 @@ cluster and local inference simultaneously is also avoidable: the agents run
 fine as host processes while iterating, and the cluster is for demonstrating the
 Kubernetes story.
 
+## Adding a tool is mechanically free and behaviourally not
+
+This document says more than once that adding a fourth agent needs no changes -
+the tool-ownership map is built at discovery, so dispatch is a lookup and no
+router has to learn about it. That is true, and it is only half the story.
+
+Adding `evaluate_expression` to the code-analysis agent changed how the model
+routes a question that has nothing to do with arithmetic.
+
+`cached-retrieval` asks "What is the Model Context Protocol?" and the corpus is
+seeded with the answer. Before the evaluator existed it called `retrieve` in 4
+of 4 runs. Afterwards it called `search_web` in 6 of 6 - the eval run plus five
+repeats.
+
+That could have been variance, so it was tested directly. The identical task was
+run five more times with one change: `evaluate_expression` filtered out of the
+tool list handed to the model. Same prompt, same model, same corpus, same
+everything else.
+
+| tool list | routing |
+|---|---|
+| five tools (evaluator visible) | 6/6 `search_web` |
+| four tools (evaluator hidden) | 5/5 `retrieve` |
+
+The presence of an unrelated tool is what moved it. Nothing else differed.
+
+Three things follow that are worth holding onto:
+
+- **A routing measurement is only valid for the tool set it was taken with.**
+  The earlier "4 of 4 `retrieve`" was a true measurement that a later change
+  invalidated without touching the case, the prompt, or the model.
+- **Tool descriptions compete for attention.** The model sees one list and picks
+  from it; a fifth entry changes the shape of that decision even when it is
+  irrelevant to the question. This is a property of tool-calling models, not a
+  bug in this system, but a system that adds agents freely has to expect it.
+- **The tool-ownership map removes the mechanical cost of adding an agent, not
+  the behavioural one.** The dispatch claim stands. The implication some readers
+  would draw from it - that a new agent cannot affect existing behaviour - does
+  not.
+
+The eval suite is what makes this visible at all. Without a case pinning
+`cached-retrieval`'s expected tool, adding the evaluator would have silently
+changed retrieval routing across the system and nothing would have said so.
+
 ## Known gaps
 
 - Schema-invalid tool input is rejected by FastMCP *before* the instrumented

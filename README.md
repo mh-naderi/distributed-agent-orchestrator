@@ -281,53 +281,45 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, six cases, ~53 s:
+Latest run — `qwen3:1.7b`, eight cases, ~94 s:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
-| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
-| cached-retrieval | yes | yes | 5 | 5 | 5 |
+| mcp-adoption-summary | yes | yes | 4 | 5 | 5 |
+| cached-retrieval | **NO** | yes | 5 | 5 | 5 |
 | code-review-basic | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | 4 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | **NO** | yes | 5 | 5 | 5 |
+| honest-ignorance | **NO** | yes | 3 | 5 | 5 |
+| arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
+| evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
 
 `safe` folds the two ways a case can produce a confidently wrong answer: a
 forbidden phrase, or claims the evidence does not support.
 
-**`honest-ignorance` found a real defect, which is now fixed.** Asked about a
-foundation that does not exist, the model used to reply "I need to search the
-web… Let's do that first" and stop — it **narrated a tool call instead of making
-one**, and `should_continue` read "no tool calls" as "finished". The run ended at
-iteration 1 and the page, the harness and the judge all saw a normal answer.
-Reproduced 5/5.
+**Adding an unrelated tool changed retrieval routing.** `cached-retrieval` used
+to call `retrieve` in 4 of 4 runs. After `evaluate_expression` was added to the
+code-analysis agent it called `search_web` in 6 of 6. Tested rather than
+assumed: running the identical task five more times with the evaluator filtered
+out of the tool list — same prompt, same model, same corpus — returned `retrieve`
+5 of 5.
 
-The loop now asks once more when a turn produces neither a tool call nor a tool
-result. Measured over five runs afterwards:
-
-| outcome | runs |
+| tool list | routing |
 |---|---|
-| nudged, then called a tool | 3/5 |
-| nudged, then admitted it could not answer | 2/5 |
-| ended at iteration 1 with a narration | **0/5** |
+| five tools | 6/6 `search_web` |
+| four tools | 5/5 `retrieve` |
 
-Grounding on that case went from 1 to 5. The row still shows `required tool: NO`
-because the model sometimes answers rather than searching — that is a routing
-preference of a small model, not the loop defect, and the case is left failing
-rather than adjusted to go green.
+A routing measurement is only valid for the tool set it was taken with, and the
+tool-ownership map removes the *mechanical* cost of adding an agent, not the
+behavioural one. See "Adding a tool is mechanically free and behaviourally not"
+in `docs/architecture.md`. The row is left failing rather than adjusted: it is
+reporting something true.
 
-**One judge weakness worth naming.** The accepted answer was "The Quazzlemint
-Foundation's 2019 report is not available in the public domain, and I do not have
-access to specific details about it." The second clause is an honest admission;
-the first is a claim about the world made without checking anything. The judge
-scored the whole thing 5. Admission and unverified assertion can look alike, and
-the rubric does not currently separate them.
+**A previously fixed defect stayed fixed.** `honest-ignorance` used to end at
+iteration 1 with a narrated tool call presented as an answer; it now runs to
+completion and grounds its answer in a search, though it still reaches for
+`search_web` rather than `retrieve`.
 
-**A previously documented failure did not reproduce.**
-**A previously documented failure did not reproduce.** Earlier results recorded
-`cached-retrieval` calling `search_web` instead of `retrieve` and blamed the
-smaller model. Re-measured, it calls `retrieve` first in 4 of 4 runs. What
-changed is not established, and this says so rather than inventing a cause.
 
 **Grounding is not truth.** Worth stating plainly, because this harness was
 fooled by it. The judge scores whether every claim in the answer is supported by
