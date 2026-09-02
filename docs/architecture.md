@@ -458,10 +458,77 @@ attached to the choice it informs.
 - ~~Schema-invalid tool input never appears as
   `tool_calls_total{status="error"}`~~ - **resolved**, see "Decision: tool
   metrics are recorded at the MCP boundary" below.
-- `ddgs` scrapes HTML rather than calling a supported API. It rate-limits under
+- `ddgs` scrapes HTML rather than calling a supported API, and rate-limits under
   rapid use; swapping in a keyed search API means changing `SearchService` only.
+  The throttling itself is no longer silent - see "Decision: a failed search is
+  not an absence" below.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
+
+## Decision: a failed search is not an absence
+
+The research agent's job is to bring back evidence. The failure that matters is
+not returning nothing - it is returning nothing in a shape that reads like a
+finding, because a model that is told "no results found" will treat absence as
+established and answer from memory. This project has already been bitten by that
+once, when a stubbed search returned a well-formed empty result and two runs
+invented two different expansions of "MCP".
+
+Reading `ddgs` 9.15.0 turned up two things that made the same mistake easy:
+
+- **It never returns an empty list.** When nothing matches it raises
+  `DDGSException("No results found.")`. So the careful "the search worked and
+  found nothing usable" branch in `SearchService` was almost unreachable - it
+  could only fire when results came back and every one was filtered as an ad.
+- **`RatelimitException` is defined but never raised.** Every failure, throttling
+  included, arrives as a generic `DDGSException` carrying the underlying engine
+  error. A rate limit and an empty search were indistinguishable by type.
+
+The result was that a throttled search and a genuinely empty one produced the
+same outcome, and the wording the model received - "No search results found for
+X" - asserted something about the world that had not been checked.
+
+Failures are now classified, and the classification decides only wording and
+retry, never correctness:
+
+| outcome | what the model is told | indexed |
+|---|---|---|
+| results | the results, with sources | yes |
+| `only_sponsored` | every result was an ad, nothing citable, not evidence of absence | no |
+| `no_results` | the search ran and matched nothing for this wording | no |
+| `rate_limited` | raises: a transport failure, says nothing about what exists | no |
+| `failed` | raises: the lookup did not happen | no |
+
+Two properties are deliberate. **An unrecognised failure is still a failure.**
+The throttle markers are matched against strings this project has not actually
+observed - triggering a real rate limit means hammering DuckDuckGo, which is the
+behaviour being avoided - so a wrong guess costs a retry, never a claim about
+the world. And **failures raise rather than return**. The orchestrator already
+converts a tool error into text the model can act on, so raising keeps
+`tool_calls_total{status="error"}` honest while still delivering the explanation.
+
+`search_outcomes_total{outcome}` records the split, which `tool_calls_total`
+cannot express: a throttled search and a successful one were previously one
+call each with no way to tell them apart.
+
+The retry is bounded to one extra attempt, which is in open tension with being
+rate-limited - the remedy for "too many requests" is not another request. One is
+justified by an observation rather than a principle: the live integration test
+failed once during a session that had just driven dozens of searches through the
+eval harness, then passed on retry and across three consecutive suite runs.
+
+### The corpus pollution this exposed
+
+`search_web` indexes its own output into the retrieval agent, and `index_results`
+stores whatever text it is handed. So the string "No search results found for
+'X'" was being written into the corpus as a document. A later `retrieve` could
+return the record of a failed search as evidence - in a system whose routing was
+just changed to try `retrieve` first. Only real results are indexed now, which is
+what `SearchOutcome.indexable` is for.
+
+Worth naming as a pattern: the bug was invisible while search results and
+explanatory messages had the same type. Making the difference explicit in the
+return value is what made the indexing rule expressible at all.
 
 ## Decision: tool metrics are recorded at the MCP boundary
 

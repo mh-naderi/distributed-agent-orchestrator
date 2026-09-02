@@ -96,6 +96,10 @@ async def test_search_returns_real_results_with_sources(registry):
     passed on retry and across three consecutive suite runs. Re-run before
     investigating - and note CI never sees this, because the integration tests
     skip there without agents.
+
+    SearchService now retries once on what looks like throttling, which should
+    make this rarer without making it impossible; a sustained rate limit still
+    surfaces, deliberately, as a failure rather than as "no results found".
     """
     result = await registry.call("search_web", {"query": "Model Context Protocol"})
 

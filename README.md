@@ -187,6 +187,10 @@ From the agents, at the tool boundary:
 - `tool_call_duration_seconds` (histogram, so p95 is computable)
 - `retrieval_documents_total` — corpus size, the one number that should
   survive a pod restart
+- `search_outcomes_total{outcome}` — `results`, `only_sponsored`, `no_results`,
+  `rate_limited`, `failed`. `tool_calls_total` cannot express this: a throttled
+  search and a successful one are one call each, and only this counter says
+  which
 
 "At the tool boundary" is load-bearing. These counters used to sit inside each
 tool function, where they could not see calls FastMCP rejected as
