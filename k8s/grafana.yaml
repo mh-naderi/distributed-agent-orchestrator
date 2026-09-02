@@ -175,6 +175,16 @@ data:
           "targets": [
             { "expr": "sum by (agent) (rate(tool_calls_total[5m]))", "legendFormat": "{{agent}}" }
           ]
+        },
+        {
+          "type": "timeseries",
+          "id": 13,
+          "title": "Search outcomes (cumulative)",
+          "description": "Why searches produced no usable results, which tool_calls_total cannot answer: a throttled search and a successful one are one call each. rate_limited and failed are transport problems and say nothing about what exists; no_results and only_sponsored are real answers about the query. Cumulative rather than a rate, because these are rare enough that a 5m window is usually empty - the question is whether it has ever happened. An empty panel means no searches yet, not zero failures.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+          "targets": [
+            { "expr": "sum by (outcome) (search_outcomes_total)", "legendFormat": "{{outcome}}" }
+          ]
         }
       ]
     }
