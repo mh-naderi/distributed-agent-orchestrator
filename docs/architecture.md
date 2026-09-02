@@ -427,6 +427,32 @@ The eval suite is what makes this visible at all. Without a case pinning
 `cached-retrieval`'s expected tool, adding the evaluator would have silently
 changed retrieval routing across the system and nothing would have said so.
 
+### The fix: guidance belongs next to the tool
+
+The regression was closed by changing one thing - `retrieve`'s own description.
+
+The instruction "try retrieve before search_web" existed only in the system
+prompt, where it competed with every tool description at once and lost ground
+as the list grew. Meanwhile `retrieve` had the second-shortest description in
+the system, 135 characters that said what it did and nothing about when to
+reach for it; `search_web`, at 90 characters, was winning on fit rather than
+merit. Moving the rule into the description puts it where the choice is
+actually made.
+
+| retrieve description | routing on the same task |
+|---|---|
+| 135 chars, "what it does" | 1/5 `retrieve`, 4/5 `search_web` |
+| 777 chars, "try me before search_web, and why" | **5/5 `retrieve`** |
+
+Nothing else changed - same prompt, same model, same corpus, same five tools.
+The eval agrees: `cached-retrieval` passes its required-tool check again.
+
+The general lesson is the one worth keeping. **A tool description is not
+documentation; it is the argument for choosing that tool over its neighbours**,
+and it has to keep holding as neighbours are added. A system prompt does not
+scale that way, because every new tool dilutes it while each description stays
+attached to the choice it informs.
+
 ## Known gaps
 
 - Schema-invalid tool input is rejected by FastMCP *before* the instrumented

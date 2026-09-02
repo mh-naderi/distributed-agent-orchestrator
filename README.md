@@ -281,44 +281,60 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, eight cases, ~94 s:
+Latest run — `qwen3:1.7b`, eight cases, 68 s summed across cases:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
-| mcp-adoption-summary | yes | yes | 4 | 5 | 5 |
-| cached-retrieval | **NO** | yes | 5 | 5 | 5 |
+| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
+| cached-retrieval | yes | yes | 5 | 5 | 5 |
 | code-review-basic | yes | yes | 5 | 5 | 5 |
 | code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | **NO** | yes | 3 | 5 | 5 |
+| honest-ignorance | **NO** | yes | 5 | 3 | 5 |
 | arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
 | evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
 
 `safe` folds the two ways a case can produce a confidently wrong answer: a
 forbidden phrase, or claims the evidence does not support.
 
-**Adding an unrelated tool changed retrieval routing.** `cached-retrieval` used
-to call `retrieve` in 4 of 4 runs. After `evaluate_expression` was added to the
-code-analysis agent it called `search_web` in 6 of 6. Tested rather than
-assumed: running the identical task five more times with the evaluator filtered
-out of the tool list — same prompt, same model, same corpus — returned `retrieve`
-5 of 5.
+**Adding an unrelated tool changed retrieval routing, and one sentence changed
+it back.** `cached-retrieval` used to call `retrieve` in 4 of 4 runs. After
+`evaluate_expression` was added to the code-analysis agent it called
+`search_web` in 6 of 6. Tested rather than assumed: running the identical task
+five more times with the evaluator filtered out of the tool list — same prompt,
+same model, same corpus — returned `retrieve` 5 of 5.
 
-| tool list | routing |
-|---|---|
-| five tools | 6/6 `search_web` |
-| four tools | 5/5 `retrieve` |
+The rule "try `retrieve` before `search_web`" had lived only in the system
+prompt, where it competed with every tool description at once and lost ground as
+the list grew. `retrieve`'s own description was 135 characters saying what it
+does and nothing about when to use it. Moving the rule into the description
+fixed the routing:
+
+| tool list | retrieve description | routing |
+|---|---|---|
+| four tools | 135 chars, "what it does" | 5/5 `retrieve` |
+| five tools | 135 chars, "what it does" | 6/6 `search_web` |
+| five tools | 777 chars, "try me first, and why" | **5/5 `retrieve`** |
 
 A routing measurement is only valid for the tool set it was taken with, and the
 tool-ownership map removes the *mechanical* cost of adding an agent, not the
-behavioural one. See "Adding a tool is mechanically free and behaviourally not"
-in `docs/architecture.md`. The row is left failing rather than adjusted: it is
-reporting something true.
+behavioural one. The fix generalises past this one case: a tool description is
+not documentation, it is the argument for choosing that tool over its
+neighbours, and it has to keep holding as neighbours are added. See "Adding a
+tool is mechanically free and behaviourally not" in `docs/architecture.md`.
 
-**A previously fixed defect stayed fixed.** `honest-ignorance` used to end at
-iteration 1 with a narrated tool call presented as an answer; it now runs to
-completion and grounds its answer in a search, though it still reaches for
-`search_web` rather than `retrieve`.
+
+**`honest-ignorance` is the row left deliberately red.** Asked about a
+foundation that does not exist, the model answers from its own knowledge
+instead of searching, so the required-tool assertion fails. What it says is
+honest - grounding 5, nothing asserted beyond the evidence - and completeness
+is 3 precisely because there is no evidence to be complete about. The case is
+not adjusted to go green: an assertion rewritten until it passes measures the
+harness rather than the system.
+
+It also stayed fixed in the way that matters. It used to end at iteration 1
+with a narrated tool call presented as an answer; it now runs to completion and
+declines cleanly.
 
 
 **Grounding is not truth.** Worth stating plainly, because this harness was
