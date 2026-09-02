@@ -20,26 +20,16 @@ import os
 import time
 from ddgs import DDGS
 from indexer import index_results
-from mcp.server.fastmcp import FastMCP
-from prometheus_client import Counter, Histogram, start_http_server
+from instrumentation import InstrumentedMCP
+from prometheus_client import Counter, start_http_server
 
 # ---------------------------------------------------------------------------
 # Metrics setup
 # ---------------------------------------------------------------------------
-# Counter: a number that only goes up (total calls, total errors)
-# Histogram: tracks a distribution of values (so you can compute p50/p95/p99
-#            latency later in Grafana, not just an average)
-#
-# Known gap worth understanding before building dashboards on these: FastMCP
-# validates tool arguments against the schema and rejects bad input BEFORE
-# calling the decorated function, so a schema-invalid call never reaches the
-# code below and never increments status="error". Only failures raised inside
-# the tool body are counted here.
-TOOL_CALLS = Counter(
-    "tool_calls_total",
-    "Total number of tool calls",
-    ["tool_name", "status"],  # labels let you slice metrics in Grafana
-)
+# Counter: a number that only goes up; Histogram: a distribution, so p95
+# latency is available in Grafana rather than only an average. Both live in
+# instrumentation.py now, recorded at the MCP boundary - see that file for why
+# counting inside the tool body could not see rejected calls at all.
 # Search results are indexed into the retrieval agent after a successful
 # search - see indexer.py for why the side effect lives here rather than in
 # the orchestrator. It is best effort, so it needs its own counter: indexing
@@ -49,12 +39,6 @@ RESULTS_INDEXED = Counter(
     "search_results_indexed_total",
     "Search results handed to the retrieval agent, by outcome",
     ["status"],
-)
-
-TOOL_LATENCY = Histogram(
-    "tool_call_duration_seconds",
-    "Tool call latency in seconds",
-    ["tool_name"],
 )
 
 # Prometheus scrapes this port for metrics (separate from the MCP protocol
@@ -85,7 +69,7 @@ MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 # service horizontally scalable if the protocol in front of it is
 # session-oriented. Nothing is lost here - the tools are pure functions, and
 # the retrieval agent keeps its state in sqlite rather than in a session.
-mcp = FastMCP(
+mcp = InstrumentedMCP(
     "research-agent",
     host="0.0.0.0",
     port=MCP_PORT,
@@ -176,25 +160,17 @@ search_service = SearchService()
 def search_web(query: str) -> str:
     """Search the web for information relevant to the query and return
     a summary of findings."""
-    start = time.time()
-    try:
-        result = search_service.run(query)
-        TOOL_CALLS.labels(tool_name="search_web", status="success").inc()
+    result = search_service.run(query)
 
-        # Housekeeping, not part of the answer. The model was asked to do this
-        # via the system prompt and reliably would not, because indexing pays
-        # off on the NEXT run and costs tokens on this one. Doing it here means
-        # the corpus grows without the orchestrator hardcoding a search/index
-        # pairing - and it cannot fail this call, only be counted.
-        stored = index_results(result, source=f"web-search: {query}")
-        RESULTS_INDEXED.labels(status="stored" if stored else "skipped").inc()
+    # Housekeeping, not part of the answer. The model was asked to do this
+    # via the system prompt and reliably would not, because indexing pays
+    # off on the NEXT run and costs tokens on this one. Doing it here means
+    # the corpus grows without the orchestrator hardcoding a search/index
+    # pairing - and it cannot fail this call, only be counted.
+    stored = index_results(result, source=f"web-search: {query}")
+    RESULTS_INDEXED.labels(status="stored" if stored else "skipped").inc()
 
-        return result
-    except Exception:
-        TOOL_CALLS.labels(tool_name="search_web", status="error").inc()
-        raise
-    finally:
-        TOOL_LATENCY.labels(tool_name="search_web").observe(time.time() - start)
+    return result
 
 
 if __name__ == "__main__":

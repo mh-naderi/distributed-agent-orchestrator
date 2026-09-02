@@ -455,15 +455,62 @@ attached to the choice it informs.
 
 ## Known gaps
 
-- Schema-invalid tool input is rejected by FastMCP *before* the instrumented
-  function runs, so validation failures never appear as
-  `tool_calls_total{status="error"}`. Worth knowing before building Grafana panels
-  on that label.
+- ~~Schema-invalid tool input never appears as
+  `tool_calls_total{status="error"}`~~ - **resolved**, see "Decision: tool
+  metrics are recorded at the MCP boundary" below.
 - `ddgs` scrapes HTML rather than calling a supported API. It rate-limits under
   rapid use; swapping in a keyed search API means changing `SearchService` only.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## Decision: tool metrics are recorded at the MCP boundary
+
+Counters used to live inside each tool function. That is the obvious place, it
+reads correctly, and it passes any test that calls the tool normally. It also
+could not see an entire class of failure.
+
+FastMCP validates arguments against the schema derived from the function
+signature *before* calling the function. A call like `retrieve(k="abc")` is
+rejected upstream, so the `try/except` meant to record the failure sat inside
+the function that never ran. The effect was not miscategorisation - it was
+silence. Measured before changing anything: a schema-invalid call raised
+`ToolError` to the client and left every sample untouched, neither `success`
+nor `error`. `sum(tool_calls_total)` was undercounting real traffic, and the
+"error rate by tool" panel was structurally incapable of showing this class.
+
+`_setup_handlers` registers `FastMCP.call_tool` as the handler for tool
+requests, and validation happens below it inside `tool.run()`. Overriding that
+one method sees every call - valid, invalid, and unknown - so `InstrumentedMCP`
+subclasses `FastMCP` and counts there. The official SDK's FastMCP has no
+middleware system; that belongs to the separate `fastmcp` v2 package. A
+subclass is the seam this version offers.
+
+Three things fell out of moving up a layer:
+
+- **The tool name is no longer hardcoded.** It arrives with the request, which
+  also means it is client-supplied and becomes a Prometheus label. An
+  unregistered name is recorded as `"unknown"` rather than passed through, so a
+  caller looping over invented tool names cannot grow the metric store.
+- **Exactly one increment per call.** `search_web` used to increment `success`
+  and then run `index_results` afterwards; had that raised, one call would have
+  been counted under both labels. Wrapping the whole call makes that
+  unrepresentable rather than merely unlikely.
+- **Nine lines of `try/except/finally` left every tool.** The instrumentation
+  was identical in all five, and identical code repeated per tool is how the
+  blind spot stayed uniform across three agents.
+
+One behaviour was characterised rather than changed: an argument that is *not*
+in the schema is ignored by pydantic, so a model that invents a parameter gets
+a successful call rather than a signal it guessed wrong. That is invisible in
+the error rate by design, and worth knowing before reading that rate as "how
+often the model called tools incorrectly".
+
+The module is duplicated verbatim into all three agent directories. Each image
+is built from its own agent directory as its context, so a shared repo-root
+module would not be copied in without widening every build context - the same
+trade already made for `requirements.txt`. Duplication is only acceptable if
+drift is caught, so a test asserts the three copies are byte-identical and that
+no server has quietly gone back to counting inside a tool body.
 ## Decision: the producer indexes its own output
 
 `index_documents` was never being called. The system prompt asks the model to

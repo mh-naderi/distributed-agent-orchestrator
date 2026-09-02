@@ -188,6 +188,13 @@ From the agents, at the tool boundary:
 - `retrieval_documents_total` — corpus size, the one number that should
   survive a pod restart
 
+"At the tool boundary" is load-bearing. These counters used to sit inside each
+tool function, where they could not see calls FastMCP rejected as
+schema-invalid — those incremented nothing at all, so the totals undercounted
+real traffic and the error panel could not show that class of failure. They now
+wrap the call itself, above validation. See "Decision: tool metrics are
+recorded at the MCP boundary" in `docs/architecture.md`.
+
 From the orchestrator, about the loop rather than individual tools:
 
 - `orchestrator_runs_total{outcome}` — `answered`, `truncated`, `failed`,

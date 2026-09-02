@@ -19,14 +19,11 @@ async worker pattern and document the before/after in the README.
 """
 
 import os
-import time
 from analysis import report
 from evaluator import report as evaluate_report
-from mcp.server.fastmcp import FastMCP
-from prometheus_client import Counter, Histogram, start_http_server
+from instrumentation import InstrumentedMCP
+from prometheus_client import start_http_server
 
-TOOL_CALLS = Counter("tool_calls_total", "Total tool calls", ["tool_name", "status"])
-TOOL_LATENCY = Histogram("tool_call_duration_seconds", "Tool call latency", ["tool_name"])
 METRICS_PORT = 9102
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 
@@ -44,7 +41,7 @@ MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 # service horizontally scalable if the protocol in front of it is
 # session-oriented. Nothing is lost here - the tools are pure functions, and
 # the retrieval agent keeps its state in sqlite rather than in a session.
-mcp = FastMCP(
+mcp = InstrumentedMCP(
     "code-analysis-agent",
     host="0.0.0.0",
     port=MCP_PORT,
@@ -76,16 +73,8 @@ def analyze_code(code: str) -> str:
     security. A clean result means these checks found nothing; it is not
     evidence that the code is correct.
     """
-    start = time.time()
-    try:
-        result = code_analysis_service.run(code)
-        TOOL_CALLS.labels(tool_name="analyze_code", status="success").inc()
-        return result
-    except Exception:
-        TOOL_CALLS.labels(tool_name="analyze_code", status="error").inc()
-        raise
-    finally:
-        TOOL_LATENCY.labels(tool_name="analyze_code").observe(time.time() - start)
+    result = code_analysis_service.run(code)
+    return result
 
 
 @mcp.tool()
@@ -101,20 +90,12 @@ def evaluate_expression(expression: str) -> str:
     assignment, loops, comprehensions and function definitions are not, and
     asking for them returns a refusal that lists what is available instead.
     """
-    start = time.time()
-    try:
-        result = evaluate_report(expression)
-        # A refusal is a successful CALL that returns a refusal - the tool did
-        # exactly its job. Counting it as an error would make the error rate
-        # measure how often the model asks for too much, which is a different
-        # question from whether this agent is healthy.
-        TOOL_CALLS.labels(tool_name="evaluate_expression", status="success").inc()
-        return result
-    except Exception:
-        TOOL_CALLS.labels(tool_name="evaluate_expression", status="error").inc()
-        raise
-    finally:
-        TOOL_LATENCY.labels(tool_name="evaluate_expression").observe(time.time() - start)
+    result = evaluate_report(expression)
+    # A refusal is a successful CALL that returns a refusal - the tool did
+    # exactly its job. Counting it as an error would make the error rate
+    # measure how often the model asks for too much, which is a different
+    # question from whether this agent is healthy.
+    return result
 
 
 if __name__ == "__main__":
