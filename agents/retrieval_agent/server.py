@@ -109,8 +109,21 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
 
 @mcp.tool()
 def retrieve(query: str, k: int = 5) -> str:
-    """Search previously indexed documents for the ones most relevant to the
-    query, by meaning rather than keyword, and return their text."""
+    """Search the stored corpus for documents relevant to the query, by meaning
+    rather than keyword.
+
+    TRY THIS BEFORE search_web. The corpus persists between runs and already
+    holds what previous searches found, so it frequently answers the question
+    with no network round trip. Only if it returns nothing relevant should the
+    web be searched.
+
+    The description carries this instruction rather than leaving it to the
+    system prompt alone. That was measured: with four tools the model chose
+    retrieve for a corpus question 4 times out of 4, and after a fifth tool was
+    added it chose search_web 4 times out of 5 - the prompt rule was competing
+    with five tool descriptions and losing. Guidance about WHEN to use a tool
+    belongs next to the tool.
+    """
     start = time.time()
     try:
         hits = store.retrieve(query, k)
