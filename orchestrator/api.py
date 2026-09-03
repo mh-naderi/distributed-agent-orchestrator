@@ -56,6 +56,7 @@ from orchestrator.metrics import (
     RUN_ITERATIONS,
     RUNS,
     NUDGES,
+    REGROUNDS,
     RUNS_QUEUED,
     TOOLS_DISCOVERED,
 )
@@ -351,6 +352,21 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                                 message=(
                                     "the model described a tool call without making "
                                     "one - asking it again"
+                                ),
+                            )
+
+                        elif node == "reground":
+                            # Same reasoning as the nudge: shown, not silent.
+                            # The held answer was built on tools that all
+                            # reported nothing, so it must not reach the page -
+                            # that answer is the failure this node exists for.
+                            pending_answer = None
+                            REGROUNDS.inc()
+                            yield _sse(
+                                "reground",
+                                message=(
+                                    "every tool reported it found nothing, and the "
+                                    "model answered anyway - asking it again"
                                 ),
                             )
 

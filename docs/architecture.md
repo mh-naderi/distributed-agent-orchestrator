@@ -465,6 +465,72 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## The guardrail for answering from nothing
+
+Every fix so far made the corpus honest: a relevance floor so a far neighbour is
+not returned as a match, provenance taken from the document rather than the
+caller, a label marked unverified when it was only asserted. None of them moved
+the fabrication rate, which sat at 1 to 2 runs in 6. That is the measurement that
+mattered, because it said the cause was no longer the corpus lying. It was that
+an answer was possible at all when nothing supported one.
+
+The `reground` node closes that. If tools ran this turn and **every one of them
+reported having nothing**, the model does not get to end the run on whatever it
+just wrote - it is sent back once, told what the evidence actually was, and asked
+again.
+
+### The agents declare it; the orchestrator does not guess
+
+A tool that has nothing to offer says so with a marker, `[no-evidence]`, and the
+orchestrator routes on that rather than on the wording. This project has twice
+shipped a lexical matcher that missed a rephrasing - "could not find" missing
+"could not be found", "not mentioned" missing "not explicitly mentioned" - and
+both times the miss was a false accusation. Putting a third one on the critical
+path of the loop itself would be a worse bet than either.
+
+The marker is duplicated into both agents and the orchestrator, the same trade as
+`instrumentation.py`, because each image builds from its own directory.
+
+### One prompt revision, from a measured regression
+
+The first version told the model to say it could not find the answer. It worked
+on the case it was built for and broke a case it was not: asked who won the 2018
+World Cup final, the model got an empty corpus, was regrounded, and **declined** -
+instead of searching the web, which would have answered it. Fabrication had been
+traded for uselessness.
+
+The prompt now says to call another tool if one could still find it, and only
+otherwise to report the absence. It still never supplies a conclusion, for the
+same reason `NUDGE_PROMPT` names no tool: telling the model what to say is how a
+loop starts producing what it was told rather than what it found.
+
+### Both guardrails addressed the model as the user, and collided
+
+A turn-scoped check that stops at the last user message treats the guardrail's own
+prompt as the start of a new turn. The nudge is shielded by its counter; the
+reground was not, so an honest answer produced *after* regrounding looked exactly
+like a narration with no tool call, and was nudged for it - two recovery attempts
+on one failure, the second arguing with a correct answer. `SYNTHETIC_PROMPTS`
+names the messages the system injected so they do not begin a turn.
+
+Worth keeping because the class generalises: any check scoped to "since the user
+last spoke" is wrong in a system that speaks as the user.
+
+### Measured
+
+| | fabrication on `honest-ignorance` |
+|---|---|
+| before, across several samples | 1 to 2 runs in 6 |
+| with the guardrail | **0 in 6** |
+
+The guardrail fired in 5 of those 6 runs and every one produced an honest answer;
+the sixth took the narration path and was nudged instead. A full evaluation run
+has all eight cases passing every automated signal, `honest-ignorance` included,
+for the first time - at the cost of two extra iterations on that case.
+
+Six runs is a small sample and the case is stochastic. What is not in doubt is
+the mechanism: the state shows `regrounds=1` on the runs that would previously
+have answered from nothing.
 ## A signal for claims about a subject the evidence never mentioned
 
 The judge scores whether each claim in an answer is supported by the tool output

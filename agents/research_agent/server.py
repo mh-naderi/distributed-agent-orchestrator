@@ -114,6 +114,13 @@ MIN_SECONDS_BETWEEN_SEARCHES = float(os.environ.get("SEARCH_MIN_INTERVAL", "1.0"
 SEARCH_MAX_ATTEMPTS = int(os.environ.get("SEARCH_MAX_ATTEMPTS", "2"))
 SEARCH_RETRY_BACKOFF = float(os.environ.get("SEARCH_RETRY_BACKOFF", "2.0"))
 
+# A tool says so when it has nothing to offer, rather than leaving the caller to
+# recognise the prose. The orchestrator refuses to end a run on an answer built
+# from nothing but these, and it must not do that by pattern-matching English:
+# this project has twice shipped a lexical matcher that missed a rephrasing.
+# The marker is the contract, the sentence after it is for the model.
+NO_EVIDENCE = "[no-evidence]"
+
 logger = logging.getLogger(__name__)
 
 # Sponsored results come back looking exactly like organic ones, but their URLs
@@ -247,6 +254,7 @@ class SearchService:
             SEARCH_OUTCOMES.labels(outcome="only_sponsored").inc()
             return SearchOutcome(
                 text=(
+                    f"{NO_EVIDENCE} "
                     f"Every result for '{query}' was a sponsored link, so there is "
                     f"nothing citable. This is not evidence that the topic is absent "
                     f"from the web - the search was not usable. Try the retrieve tool "
@@ -280,6 +288,7 @@ class SearchService:
             SEARCH_OUTCOMES.labels(outcome="rate_limited").inc()
             logger.warning("search rate-limited for %r: %s", query, exc)
             raise SearchUnavailable(
+                f"{NO_EVIDENCE} "
                 f"Web search is rate-limited right now, so '{query}' could not be "
                 f"looked up. This is a transport failure, not a finding: it says "
                 f"nothing about whether the information exists. Try the retrieve "
@@ -291,6 +300,7 @@ class SearchService:
             SEARCH_OUTCOMES.labels(outcome="no_results").inc()
             return SearchOutcome(
                 text=(
+                    f"{NO_EVIDENCE} "
                     f"The search ran and matched nothing for '{query}'. That is a "
                     f"result about this query's wording, not proof the subject does "
                     f"not exist - consider rephrasing before concluding anything."
@@ -301,6 +311,7 @@ class SearchService:
         SEARCH_OUTCOMES.labels(outcome="failed").inc()
         logger.warning("search failed for %r: %s", query, exc)
         raise SearchUnavailable(
+            f"{NO_EVIDENCE} "
             f"Web search failed for '{query}' ({exc}). The lookup did not happen, "
             f"so nothing follows from it about what is or is not true. Try the "
             f"retrieve tool, or say the check could not be completed."

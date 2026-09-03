@@ -6,7 +6,13 @@ what's under test is purely the orchestration logic - does a tool result get
 fed back, does the loop terminate, does the guardrail hold.
 """
 
-from orchestrator.graph import MAX_ITERATIONS, SYSTEM_PROMPT, build_graph
+from orchestrator.graph import (
+    MAX_ITERATIONS,
+    NO_EVIDENCE,
+    REGROUND_PROMPT,
+    SYSTEM_PROMPT,
+    build_graph,
+)
 from orchestrator.llm import LLMResponse, ToolCall
 from tests.conftest import FakeRegistry, ScriptedProvider
 
@@ -181,3 +187,138 @@ async def test_tool_error_is_fed_back_rather_than_raised():
     tool_message = next(m for m in final["messages"] if m["role"] == "tool")
     assert "Error calling search_web" in tool_message["content"]
     assert final["messages"][-1]["content"] == "That tool failed, answering directly."
+
+
+# ---------------------------------------------------------------------------
+# Answering from tools that all reported nothing
+# ---------------------------------------------------------------------------
+# The nudge covers a model that never called a tool. This covers the opposite
+# and more dangerous case: it called them, they all said they had nothing, and
+# it answered anyway. Every fabrication this project has recorded has that shape.
+
+
+def _empty(text: str) -> str:
+    return f"{NO_EVIDENCE} {text}"
+
+
+async def test_answering_from_nothing_is_sent_back():
+    registry = FakeRegistry(
+        results={"retrieve": _empty("No documents are close enough to that query.")}
+    )
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "retrieve", {"query": "x"})]),
+            LLMResponse(content="The Quazzlemint Foundation concluded that grants helped."),
+            LLMResponse(content="I could not find anything about that."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final["regrounds"] == 1
+    assert final["messages"][-1]["content"] == "I could not find anything about that."
+    assert any(
+        m.get("content") == REGROUND_PROMPT for m in final["messages"]
+    ), "the model should have been told what the evidence actually was"
+
+
+async def test_a_real_result_is_not_second_guessed():
+    """The guardrail must stay out of the way when a tool actually found something."""
+    registry = FakeRegistry(results={"retrieve": "MCP standardises tool access."})
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "retrieve", {"query": "mcp"})]),
+            LLMResponse(content="MCP standardises tool access."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final.get("regrounds", 0) == 0
+
+
+async def test_one_useful_result_among_empty_ones_is_enough():
+    """
+    Partial evidence is evidence. Firing here would send back an answer that had
+    something real behind it, which is a different and worse mistake.
+    """
+    registry = FakeRegistry(
+        results={
+            "retrieve": _empty("Nothing close enough."),
+            "search_web": "Foundations published annual reports in 2019.",
+        }
+    )
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "retrieve", {"query": "x"})]),
+            LLMResponse(content="", tool_calls=[ToolCall("c2", "search_web", {"query": "x"})]),
+            LLMResponse(content="Foundations published annual reports in 2019."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final.get("regrounds", 0) == 0
+
+
+async def test_regrounding_happens_at_most_once():
+    """
+    A model that answers from nothing twice is not going to be talked round by a
+    third attempt, and a guardrail that keeps firing is a loop.
+    """
+    registry = FakeRegistry(results={"retrieve": _empty("Nothing close enough.")})
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "retrieve", {"query": "x"})]),
+            LLMResponse(content="The foundation concluded something."),
+            LLMResponse(content="The foundation concluded something else."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final["regrounds"] == 1
+    assert final["messages"][-1]["content"] == "The foundation concluded something else."
+
+
+async def test_a_turn_with_no_tool_call_is_the_nudge_s_business():
+    """
+    Both guardrails must not fire on one failure. Nothing ran, so there is no
+    empty evidence to speak of - that is a narration, and the nudge owns it.
+    """
+    registry = FakeRegistry()
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="I should search for that."),
+            LLMResponse(content="I could not find anything."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final["nudges"] == 1
+    assert final.get("regrounds", 0) == 0
+
+
+async def test_the_guardrails_do_not_fire_on_each_other():
+    """
+    Regression. Both guardrails address the model as the user, for provider
+    portability, so a turn-scoped check that stops at the last user message read
+    the guardrail's own prompt as the start of a new turn: after regrounding, an
+    honest answer with no tool call looked exactly like a narration and was
+    nudged for it. Two recovery attempts on one failure, the second of them
+    arguing with a correct answer.
+    """
+    registry = FakeRegistry(results={"retrieve": _empty("Nothing close enough.")})
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="", tool_calls=[ToolCall("c1", "retrieve", {"query": "x"})]),
+            LLMResponse(content="The foundation concluded something."),
+            LLMResponse(content="I could not find anything about that."),
+        ]
+    )
+
+    final = await build_graph(registry, provider).ainvoke(initial_state())
+
+    assert final["regrounds"] == 1
+    assert final.get("nudges", 0) == 0, "the reground's own prompt started a new turn"

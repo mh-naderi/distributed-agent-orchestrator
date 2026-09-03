@@ -301,7 +301,7 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, eight cases, 68 s summed across cases:
+Latest run — `qwen3:1.7b`, eight cases, 72 s summed across cases:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
@@ -310,7 +310,7 @@ Latest run — `qwen3:1.7b`, eight cases, 68 s summed across cases:
 | code-review-basic | yes | yes | 5 | 5 | 5 |
 | code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | **NO** | yes | 5 | 3 | 5 |
+| honest-ignorance | yes | yes | 3 | 5 | 5 |
 | arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
 | evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
 
@@ -345,8 +345,8 @@ neighbours, and it has to keep holding as neighbours are added. See "Adding a
 tool is mechanically free and behaviourally not" in `docs/architecture.md`.
 
 
-**`honest-ignorance` went green for the wrong reason, which is worse than
-red.** The table above was one run. Re-measured the next day, the case passed
+**`honest-ignorance` passes now, and the road there is the most useful thing
+in this repo.** It went green once for the wrong reason first. The table above was one run. Re-measured the next day, the case passed
 every automated check - required tool called, claim budget met, grounding 5,
 zero unsupported claims - while confidently reporting what a foundation that
 does not exist had concluded.
@@ -375,8 +375,16 @@ now ranges 1 to 5. Still not solved, and a first sample of three clean runs
 would have said otherwise. See "The corpus learned to vouch for a fiction" in
 `docs/architecture.md`.
 
-This is the case the whole project is organised around, and it is left honest
-about its own state rather than adjusted until it passes.
+What finally moved it was none of the corpus fixes. Those made the corpus
+honest and left the fabrication rate at 1 to 2 runs in 6, which is what said the
+cause was elsewhere: an answer was possible at all when nothing supported one.
+The orchestrator now refuses to end a run on one. If every tool that ran reported
+having nothing — they say so with a marker, so the loop is not pattern-matching
+English — the model is sent back once, told what the evidence actually was, and
+asked again. Fabrication went to **0 in 6**.
+
+This is the case the whole project is organised around, and it was left honest
+about its own state at every stage rather than adjusted until it passed.
 
 The harness can now see the failure it used to miss. `check_subject_grounding`
 is a deterministic signal for an answer that makes claims about a subject the

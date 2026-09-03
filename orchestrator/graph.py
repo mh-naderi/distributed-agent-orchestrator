@@ -32,6 +32,15 @@ MAX_ITERATIONS = 10  # guardrail against infinite loops - see project notes
 
 MAX_NUDGES = 1  # one recovery attempt, never a loop
 
+MAX_REGROUNDS = 1  # likewise: one chance to answer honestly, never a loop
+
+# Declared by the agents, not inferred from their prose. Any tool result carrying
+# this reported that it had nothing - an empty corpus match, a search that found
+# nothing usable, a search that failed. Matching the sentences instead would put
+# a lexical guess on the critical path, and this project has twice shipped one
+# that missed a rephrasing.
+NO_EVIDENCE = "[no-evidence]"
+
 # Sent when the model DESCRIBES a tool call rather than making one.
 #
 # Deliberately does not name a tool or assume one is needed. The model may well
@@ -43,6 +52,27 @@ NUDGE_PROMPT = (
     "If the information you need is not available to you, say so plainly "
     "instead of describing what you would do."
 )
+
+# Sent when every tool came back empty and the model answered anyway.
+#
+# It does not tell the model what the answer is, only what the evidence was, for
+# the same reason NUDGE_PROMPT names no tool: supplying the conclusion is how a
+# loop starts producing what it was told rather than what it found.
+REGROUND_PROMPT = (
+    "None of the tools you called returned any information. Nothing came back "
+    "that supports an answer. If another tool could still find it, call that "
+    "tool now. Otherwise say plainly that you could not find it, and do not "
+    "describe, summarise or draw conclusions about it from your own knowledge. "
+    "If the documents you saw are about something else, say that instead."
+)
+
+# Both guardrails speak to the model as the user, for provider portability, and
+# that has a consequence worth naming: a turn-scoped check that stops at the last
+# user message would treat the guardrail's own prompt as the start of a new turn.
+# The nudge is shielded by its counter; the reground was not, so an honest answer
+# produced after regrounding was read as a narration and nudged. These are the
+# messages the system injected, and they do not begin a turn.
+SYNTHETIC_PROMPTS = frozenset()  # populated below, once both prompts exist
 
 SYSTEM_PROMPT = """You are an orchestrator. You answer by calling tools, not from memory.
 
@@ -59,6 +89,9 @@ RULES:
 
 Use only what the tools returned. If they returned nothing useful, say so.
 Never fill a gap with your own knowledge."""
+
+
+SYNTHETIC_PROMPTS = frozenset({NUDGE_PROMPT, REGROUND_PROMPT})
 
 
 def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
@@ -182,11 +215,54 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         seconds of inference.
         """
         for message in reversed(messages):
-            if message["role"] == "user":
+            if message["role"] == "user" and message.get("content") not in SYNTHETIC_PROMPTS:
                 return False
             if message["role"] == "tool":
                 return True
         return False
+
+    def _every_tool_came_back_empty(messages: list[dict]) -> bool:
+        """
+        Did tools run this turn, and did all of them report having nothing?
+
+        Scoped to the turn like _acted_this_turn, and for the same reason: what
+        matters is the evidence behind the answer being given now, not what an
+        earlier question happened to find.
+
+        Requires at least one tool result. A turn where nothing ran is the
+        nudge's business, and treating it as empty evidence would fire both
+        guardrails on one failure.
+        """
+        results = []
+        for message in reversed(messages):
+            if message["role"] == "user" and message.get("content") not in SYNTHETIC_PROMPTS:
+                break
+            if message["role"] == "tool":
+                results.append(message.get("content", "") or "")
+
+        return bool(results) and all(NO_EVIDENCE in result for result in results)
+
+    async def reground(state: AgentState) -> dict:
+        """
+        Give the model one more turn after it answered from nothing.
+
+        THE FAILURE THIS EXISTS FOR. Asked what a foundation that does not exist
+        concluded in a report that does not exist, the model called retrieve and
+        search_web, was told by both that they had nothing, and then described
+        the report anyway - drawing on real documents about other foundations
+        that happened to come back. Measured at 1 to 2 runs in 6, and the corpus
+        fixes that removed the misleading provenance did not move it, because the
+        cause is not what the documents claimed. It is that an answer was
+        possible at all when nothing supported one.
+
+        A user-role message for the same portability reason as the nudge: the
+        Claude provider hoists system messages out of position.
+        """
+        logger.info("every tool reported no evidence and the model answered anyway; regrounding once")
+        return {
+            "messages": [{"role": "user", "content": REGROUND_PROMPT}],
+            "regrounds": state.get("regrounds", 0) + 1,
+        }
 
     async def nudge(state: AgentState) -> dict:
         """
@@ -235,6 +311,16 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         if state.get("nudges", 0) < MAX_NUDGES and not _acted_this_turn(state["messages"]):
             return "nudge"
 
+        # Tools ran and every one of them reported having nothing. Whatever the
+        # model just wrote, it was not built on evidence, so it gets one chance
+        # to say so. Checked after the nudge so a turn with no tool call is
+        # handled as the narration it is.
+        if (
+            state.get("regrounds", 0) < MAX_REGROUNDS
+            and _every_tool_came_back_empty(state["messages"])
+        ):
+            return "reground"
+
         return "end"
 
     graph = StateGraph(AgentState)
@@ -242,15 +328,23 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
     graph.add_node("act", call_mcp_tool)
     graph.add_node("truncate", note_truncation)
     graph.add_node("nudge", nudge)
+    graph.add_node("reground", reground)
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges(
         "reason",
         should_continue,
-        {"continue": "act", "truncated": "truncate", "nudge": "nudge", "end": END},
+        {
+            "continue": "act",
+            "truncated": "truncate",
+            "nudge": "nudge",
+            "reground": "reground",
+            "end": END,
+        },
     )
     graph.add_edge("act", "reason")
     graph.add_edge("truncate", END)
     graph.add_edge("nudge", "reason")
+    graph.add_edge("reground", "reason")
 
     return graph.compile()

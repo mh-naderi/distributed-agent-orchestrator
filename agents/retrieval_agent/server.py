@@ -57,6 +57,13 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 # answer about something the corpus never contained, which is not.
 MAX_MATCH_DISTANCE = float(os.environ.get("RETRIEVAL_MAX_DISTANCE", "0.70"))
 
+# A tool says so when it has nothing to offer, rather than leaving the caller to
+# recognise the prose. The orchestrator refuses to end a run on an answer built
+# from nothing but these, and it must not do that by pattern-matching English:
+# this project has twice shipped a lexical matcher that missed a rephrasing.
+# The marker is the contract, the sentence after it is for the model.
+NO_EVIDENCE = "[no-evidence]"
+
 # stateless_http=True: no Mcp-Session-Id is issued, so every request stands
 # alone and any replica can serve any of them.
 #
@@ -177,6 +184,7 @@ def retrieve(query: str, k: int = 5) -> str:
         # that plainly matters: the model must not read this as licence to answer
         # from its own knowledge.
         return (
+            f"{NO_EVIDENCE} "
             "No documents in the index are close enough to that query to count as "
             "a match. That is not evidence the subject does not exist - the corpus "
             "simply does not cover it. Search the web, or say you could not find "

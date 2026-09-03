@@ -87,6 +87,16 @@ NUDGES = Counter(
     "Runs re-prompted after the model narrated a tool call without making one",
 )
 
+# Runs where every tool came back empty and the model answered anyway, so it was
+# sent back to say so instead. Counted separately from nudges because the two
+# describe different failures: a nudge means the model never called a tool, this
+# means it called them, got nothing, and answered regardless. That second one is
+# the shape of every fabrication this project has recorded.
+REGROUNDS = Counter(
+    "orchestrator_regrounds_total",
+    "Runs re-prompted after answering from tools that all reported no evidence",
+)
+
 RUNS_QUEUED = Counter(
     "orchestrator_runs_queued_total",
     "Runs that waited for a concurrency slot before starting",

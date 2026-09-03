@@ -40,3 +40,11 @@ class AgentState(TypedDict):
     #
     # No reducer, so the value a node returns replaces the old one.
     nudges: int
+
+    # How many times this run has been sent back after answering from tools that
+    # all reported having nothing. Separate from nudges because it is a different
+    # failure with a different remedy: a nudge means no tool ran, this means they
+    # ran and came back empty. Bounded to one for the same reason.
+    #
+    # No reducer, so the value a node returns replaces the old one.
+    regrounds: int
