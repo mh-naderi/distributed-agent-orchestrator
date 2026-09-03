@@ -24,7 +24,7 @@ import ollama
 from instrumentation import InstrumentedMCP
 from prometheus_client import Gauge, start_http_server
 
-from store import VectorStore, chunk
+from store import VectorStore, chunk, is_derived
 
 
 # A stateless agent's metrics are all about flow - how many calls, how fast. A
@@ -127,6 +127,27 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
     )
 
 
+def _attribution(source: str) -> str:
+    """
+    How a document's origin is presented to the model.
+
+    A URL was read out of the document itself and is worth stating as fact. Any
+    other label is what the indexing caller said, and the model is one of those
+    callers: asked about a foundation that does not exist, it indexed real
+    documents about other foundations and passed the question as the label. It
+    then read that label back as though a tool had confirmed the connection.
+
+    Marking the difference is cheap and the alternative was not: a caller's claim
+    printed in the same shape as a derived fact is indistinguishable from
+    evidence, and this system had already answered from one.
+    """
+    if is_derived(source):
+        return f"source: {source}"
+    # Terse on purpose. A longer hedge was measured and changed nothing about
+    # the answers, so it was only spending context on a small model.
+    return f"unverified label: {source}"
+
+
 @mcp.tool()
 def retrieve(query: str, k: int = 5) -> str:
     """Search the stored corpus for documents relevant to the query, by meaning
@@ -163,7 +184,8 @@ def retrieve(query: str, k: int = 5) -> str:
         )
 
     return "\n\n".join(
-        f"[{i + 1}] (source: {hit['source']}, distance: {hit['distance']:.3f})\n{hit['text']}"
+        f"[{i + 1}] ({_attribution(hit['source'])}, distance: {hit['distance']:.3f})"
+        f"\n{hit['text']}"
         for i, hit in enumerate(hits)
     )
 

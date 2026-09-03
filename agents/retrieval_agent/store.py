@@ -50,6 +50,22 @@ DB_PATH = os.environ.get("RETRIEVAL_DB_PATH", "data/retrieval.db")
 SOURCE_LINE = re.compile(r"^Source:\s*(\S+)\s*$", re.MULTILINE)
 
 
+def is_derived(source: str) -> bool:
+    """
+    Was this source read out of the document, or asserted by whoever indexed it?
+
+    provenance_of only ever derives a URL, so a URL is the one case where the
+    corpus knows where a document came from. Everything else is a caller's word
+    for it, which may be an honest fixture label ("integration-test") or a claim
+    about content the caller never produced.
+
+    The distinction cannot be recovered from who called - MCP tools have no
+    caller identity, and the model uses the same tool as the test fixtures - so
+    it is recovered from the shape of the label instead.
+    """
+    return source.startswith(("http://", "https://"))
+
+
 def provenance_of(text: str, fallback: str) -> str:
     """
     Where this specific document came from, preferring what it says itself.

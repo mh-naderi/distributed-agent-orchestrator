@@ -628,6 +628,45 @@ For the same reason `index_documents` no longer echoes the caller's label back i
 its confirmation. Reporting "indexed from X" when X was discarded would tell the
 model its label stuck.
 
+### The fallback still let a question become provenance
+
+Preferring a document's own `Source:` line fixes documents that have one. Text
+that does not - fragments the model composes itself and hands to
+`index_documents` - falls back to the caller's label, and the model passes the
+question as that label. Twenty-six such documents accumulated over one session's
+validation runs, after a purge had taken the count to zero.
+
+The obvious remedy is wrong. Rejecting caller labels outright would also discard
+the honest ones: `integration-test`, `eval-fixture`, `k8s`. And the agent cannot
+tell an honest caller from a careless one, because MCP tools have no caller
+identity - the model uses the same tool as the test fixtures.
+
+What it *can* tell is whether a source was **derived from the document** or
+**asserted about it**. `provenance_of` only ever derives a URL, so a URL is the
+one case where the corpus knows where a document came from; everything else is
+somebody's word for it. `retrieve` now presents the two differently:
+
+```
+[1] (source: https://assets.ctfassets.net/...mellonannualreport_2019.pdf, distance: 0.601)
+[2] (unverified label: Quazzlemint Foundation 2019 report, distance: 0.619)
+```
+
+The label is still stored. Discarding it would lose the audit trail that found
+the contamination in the first place; what changed is that a claim is no longer
+printed in the same shape as a derived fact.
+
+**Measured, and it changed nothing.** Fabrication on `honest-ignorance` stayed at
+2 runs in 6, against 1 to 2 in 6 before. At these sample sizes that is noise, not
+an improvement. The change is kept because it is correct on its own terms - the
+corpus should not present an assertion as a fact - and not because it was shown
+to help. An earlier, wordier version of the same hedge was shortened for the same
+reason: it was spending context on a small model and buying nothing.
+
+Worth stating plainly, because the temptation is to report a principled change as
+a win. The remaining fabrication does not come from the corpus lying any more. It
+comes from the model attributing documents to a name it was asked about, which no
+amount of labelling in the retrieval layer addresses.
+
 ### What it actually bought, measured
 
 Fabrication on `honest-ignorance` went from 2 runs in 3 to 1 in 6, and the judge

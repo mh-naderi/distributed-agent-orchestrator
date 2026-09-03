@@ -348,3 +348,50 @@ def test_a_quoted_source_line_in_the_body_does_not_win(store):
     )
 
     assert store.retrieve("kubernetes")[0]["source"] == "https://example.org/real"
+
+
+# ---------------------------------------------------------------------------
+# Derived origin vs asserted label
+# ---------------------------------------------------------------------------
+# provenance_of only ever derives a URL, so a URL is the one case where the
+# corpus knows where a document came from. Everything else is a caller's word,
+# and the model is one of the callers.
+
+
+def test_a_url_source_is_derived():
+    from agents.retrieval_agent.store import is_derived
+
+    assert is_derived("https://example.org/report.pdf")
+    assert is_derived("http://example.org/report.pdf")
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Quazzlemint Foundation 2019 report",  # the model asserting aboutness
+        "web-search",                          # an agent's honest fixture label
+        "integration-test",
+        "eval-fixture",
+        "",
+    ],
+)
+def test_everything_else_is_an_assertion(label):
+    """
+    Honest labels are assertions too. The point is not that they are wrong, it is
+    that the corpus cannot tell an honest one from a claim about content the
+    caller never produced - so it must not present either as a derived fact.
+    """
+    from agents.retrieval_agent.store import is_derived
+
+    assert not is_derived(label)
+
+
+def test_a_document_with_no_origin_keeps_the_callers_label(store):
+    """
+    The label is still stored. Discarding it would lose the audit trail that
+    found the contamination in the first place; what changes is how it is
+    presented, not whether it is kept.
+    """
+    store.index(["kubernetes notes with no source line"], "Quazzlemint Foundation")
+
+    assert store.retrieve("kubernetes")[0]["source"] == "Quazzlemint Foundation"

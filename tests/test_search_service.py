@@ -253,3 +253,36 @@ def test_a_rate_limit_reaches_the_caller_from_the_tool(fake_search, monkeypatch)
 
     with pytest.raises(SearchUnavailable):
         research_server.search_web("q")
+
+
+# ---------------------------------------------------------------------------
+# How a document's origin is presented to the model
+# ---------------------------------------------------------------------------
+
+_ret_spec = importlib.util.spec_from_file_location(
+    "retrieval_server",
+    Path(__file__).resolve().parents[1] / "agents" / "retrieval_agent" / "server.py",
+)
+retrieval_server = importlib.util.module_from_spec(_ret_spec)
+sys.modules["retrieval_server"] = retrieval_server
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agents" / "retrieval_agent"))
+_ret_spec.loader.exec_module(retrieval_server)
+
+
+def test_a_derived_url_is_presented_as_a_source():
+    assert retrieval_server._attribution("https://example.org/a.pdf") == (
+        "source: https://example.org/a.pdf"
+    )
+
+
+@pytest.mark.parametrize("label", ["Quazzlemint Foundation 2019 report", "integration-test"])
+def test_an_asserted_label_is_marked_unverified(label):
+    """
+    What the model reads is the whole point. A caller's claim printed in the same
+    shape as a derived fact is indistinguishable from evidence, and this system
+    had already answered from one.
+    """
+    rendered = retrieval_server._attribution(label)
+
+    assert rendered == f"unverified label: {label}"
+    assert not rendered.startswith("source:")
