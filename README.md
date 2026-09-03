@@ -302,18 +302,28 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, eight cases, 72 s summed across cases:
+Latest run — `qwen3:1.7b`, nine cases, 92 s summed across cases:
 
-| case | required tool | safe | grounding | completeness | relevance |
-|---|---|---|---|---|---|
-| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
-| cached-retrieval | yes | yes | 5 | 5 | 5 |
-| code-review-basic | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
-| code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | yes | yes | 3 | 5 | 5 |
-| arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
-| evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
+| case | required tool | keywords | safe | grounding | completeness | relevance |
+|---|---|---|---|---|---|---|
+| mcp-adoption-summary | yes | **NO** | yes | 5 | 5 | 5 |
+| cached-retrieval | yes | yes | yes | 5 | 5 | 5 |
+| code-review-basic | yes | yes | yes | 5 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | yes | 5 | 5 | 5 |
+| code-review-syntax-error | yes | yes | yes | 5 | 5 | 5 |
+| honest-ignorance | yes | yes | **NO** | 1 | 5 | 3 |
+| arithmetic-uses-the-evaluator | yes | yes | yes | 5 | 5 | 5 |
+| evaluator-refusal-is-relayed | yes | yes | yes | 5 | 5 | 5 |
+| a-checkable-fact | yes | yes | yes | 5 | 5 | 5 |
+
+**This is one run, and the suite is not deterministic.** The run before it had
+all nine green. Publishing the greener one would misrepresent a system driven by
+a sampling model, so the most recent run is what appears here, whatever it says.
+The two failures above are both real and both informative: `mcp-adoption-summary`
+returned a summary that happened not to use the word "protocol", and
+`honest-ignorance` took the search path, where the empty-evidence guardrail does
+not apply, and the judge caught it asserting that a report which does not exist
+"did not provide specific conclusions".
 
 `safe` folds the three ways a case can produce a confidently wrong answer: a
 forbidden phrase, claims the evidence does not support, or claims about a
@@ -397,14 +407,24 @@ so far: three earlier versions each called an honest denial a fabrication, and
 each was found by running the case rather than by reasoning about it.
 
 
-**Grounding is not truth.** Worth stating plainly, because this harness was
-fooled by it. The judge scores whether every claim in the answer is supported by
+**Grounding is not truth, and one case now checks truth directly.** Worth
+stating plainly, because this harness was fooled by it. The judge scores whether every claim in the answer is supported by
 the tool output. It cannot tell that the tool output was itself false. While
 `analyze_code` was a stub returning "no issues found", this table published
 `code-review-basic` at grounding 5/5 — a perfectly grounded answer built on a
 fabrication. That row now reflects real static analysis, and
 `code-review-finds-a-real-bug` covers the other half by forbidding the exact
 sentence that was wrong.
+
+`a-checkable-fact` is the answer to that. Other cases already assert
+correctness — `code-review-finds-a-real-bug` wants "zero", the arithmetic case
+wants "367303" — but those are facts derivable from what was handed to the
+system. This one has to be *fetched*, so it is the first place a well-formed,
+well-grounded answer about the world can be wrong and fail for it. It exists
+because the system answered "The 2018 FIFA World Cup final was won by Argentina"
+after a real search: the required tool was called, the judge scored it grounded
+because the claim did trace back to documents about the 2018 final, and nothing
+in the harness objected. France won.
 
 Keeping the two signals separate is what makes any of this visible. A single
 blended score would have hidden both the routing question and the empty corpus.

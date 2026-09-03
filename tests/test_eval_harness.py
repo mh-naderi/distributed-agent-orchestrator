@@ -460,3 +460,82 @@ def test_denials_phrased_as_the_subject_not_doing_something(sentence):
     result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
 
     assert result["invented_subject_claims"] == []
+
+
+# ---------------------------------------------------------------------------
+# The first case where being wrong fails
+# ---------------------------------------------------------------------------
+
+
+def _checkable_fact():
+    return next(
+        c for c in json.loads(CASES_PATH.read_text(encoding="utf-8"))
+        if c["id"] == "a-checkable-fact"
+    )
+
+
+def test_the_answer_that_fooled_every_other_signal_now_fails():
+    """
+    The real answer, verbatim. It called its tool, the judge scored it grounded
+    because the claim did trace back to documents about the 2018 final, and no
+    forbidden phrase existed to catch it. France won.
+    """
+    case = _checkable_fact()
+
+    signals = run_eval.check_automated_signals(
+        case,
+        "The 2018 FIFA World Cup final was won by Argentina.",
+        ["search_web"],
+    )
+
+    assert signals["keyword_match"] is False
+    assert signals["forbidden_phrases"] == ["won by Argentina"]
+
+
+def test_the_correct_answer_passes():
+    case = _checkable_fact()
+
+    signals = run_eval.check_automated_signals(
+        case,
+        "The 2018 FIFA World Cup final was won by France, who beat Croatia 4-2.",
+        ["search_web"],
+    )
+
+    assert signals["keyword_match"] is True
+    assert signals["forbidden_phrases"] == []
+
+
+def test_naming_a_losing_side_is_not_a_forbidden_phrase():
+    """
+    Why the forbidden phrases are "won by Argentina" rather than "Argentina". A
+    check that fires on a correct answer is worse than one that misses a wrong
+    answer, because it makes the harness untrustworthy about everything else.
+    """
+    case = _checkable_fact()
+
+    signals = run_eval.check_automated_signals(
+        case,
+        "France won. Argentina had been eliminated in the round of 16.",
+        ["search_web"],
+    )
+
+    assert signals["forbidden_phrases"] == []
+    assert signals["keyword_match"] is True
+
+
+def test_the_case_pins_both_the_right_answer_and_the_observed_wrong_one():
+    """
+    Other cases already assert correctness - code-review-finds-a-real-bug wants
+    "zero", arithmetic wants "367303" - but those are facts derivable from what
+    was handed to the system. This is the first that has to be FETCHED, so it is
+    the first place a well-formed answer about the world can be wrong and fail.
+
+    Both halves are required. must_contain alone would pass an answer naming
+    France and Argentina both; must_not_contain alone would pass "I could not
+    find it".
+    """
+    case = _checkable_fact()
+
+    assert case["must_contain"] == ["France"]
+    assert "won by Argentina" in case["must_not_contain"]
+    assert case["max_unsupported_claims"] == 0

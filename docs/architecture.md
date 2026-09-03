@@ -465,6 +465,45 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## One case that checks whether the answer is true
+
+Every signal in this harness asks whether an answer is *supported*. None asked
+whether it is *right*, and the gap is not academic. Asked who won the 2018 World
+Cup final, the system searched, received real results, and answered:
+
+> The 2018 FIFA World Cup final was won by Argentina.
+
+France won. The required tool was called, the judge scored it grounded because
+the claim did trace back to documents about the 2018 final, and no forbidden
+phrase existed to catch it. Every signal passed a confidently wrong answer, which
+is the failure this project is organised around wearing yet another shape.
+
+`a-checkable-fact` pins both halves: `must_contain` is "France", and
+`must_not_contain` carries the phrasings actually observed. Both are needed -
+`must_contain` alone passes an answer naming France and Argentina both, and
+`must_not_contain` alone passes "I could not find it".
+
+The forbidden phrases are "won by Argentina" and "Argentina won" rather than the
+bare word, because a correct answer may legitimately name a losing side. A check
+that fires on a right answer is worse than one that misses a wrong answer: it
+makes the harness untrustworthy about everything else it reports.
+
+No tool is required. The source does not matter for this question, and pinning
+one would fail the case whenever an earlier run had already indexed the answer -
+which is exactly what happened while testing it, with all five runs answering
+correctly from the corpus rather than from a fresh search.
+
+### It is narrower than it first looks
+
+Other cases already assert correctness: `code-review-finds-a-real-bug` requires
+"zero" and the arithmetic case requires "367303". A first version of the test for
+this claimed to be the only case checking a fact, and that was wrong - it failed
+immediately against the existing cases. The real distinction is that those facts
+are derivable from what was handed to the system, while this one must be fetched
+from the world. That also makes it the one case that can fail without a
+regression, when a rate-limited search leaves nothing to fetch and the corpus
+does not already hold the answer.
+
 ## When asking again does not work
 
 The nudge asks once when the model writes out a tool call instead of making one.
