@@ -6,12 +6,15 @@ what's under test is purely the orchestration logic - does a tool result get
 fed back, does the loop terminate, does the guardrail hold.
 """
 
+import pytest
+
 from orchestrator.graph import (
     MAX_ITERATIONS,
     NO_EVIDENCE,
     REGROUND_PROMPT,
     SYSTEM_PROMPT,
     build_graph,
+    looks_like_a_raw_tool_call,
 )
 from orchestrator.llm import LLMResponse, ToolCall
 from tests.conftest import FakeRegistry, ScriptedProvider
@@ -322,3 +325,75 @@ async def test_the_guardrails_do_not_fire_on_each_other():
 
     assert final["regrounds"] == 1
     assert final.get("nudges", 0) == 0, "the reground's own prompt started a new turn"
+
+
+# ---------------------------------------------------------------------------
+# A narrated tool call must never be published as an answer
+# ---------------------------------------------------------------------------
+
+NARRATION = '{"name": "retrieve", "arguments": {"query": "Quazzlemint Foundation"}}'
+
+
+async def test_a_tool_call_typed_as_text_does_not_become_the_answer():
+    """
+    Observed after the nudge had fired and spent its budget: the run ended with
+    a JSON tool call as its answer, and the page would have rendered that as the
+    result. The nudge asks once; this is what happens when asking did not work.
+    """
+    provider = ScriptedProvider([LLMResponse(content=NARRATION)] * 3)
+
+    final = await build_graph(FakeRegistry(), provider).ainvoke(initial_state())
+
+    assert final["nudges"] == 1, "it should still be asked once first"
+    assert final["messages"][-1].get("unanswered") is True
+    assert "not an answer" in final["messages"][-1]["content"]
+    assert NARRATION not in final["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"name": "retrieve", "arguments": {}}',
+        '[{"name": "search_web", "arguments": {"query": "x"}}]',
+        '  {"tool_calls": [{"name": "retrieve"}]}  ',
+    ],
+)
+def test_tool_call_payloads_are_recognised(content):
+    assert looks_like_a_raw_tool_call(content)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "I could not find anything about that.",
+        "",
+        "The answer is {not json}",
+        '{"total": 42}',                      # JSON, but no tool name
+        "I will search for that next.",       # prose narration - the nudge's job
+        '{"name": "incomplete',               # malformed
+    ],
+)
+def test_ordinary_answers_are_not_mistaken_for_tool_calls(content):
+    """
+    A false positive here replaces a real answer with a failure notice, which is
+    worse than the bug being fixed. Prose narration is deliberately not caught:
+    the nudge covers it, and catching it reliably would need the lexical guessing
+    this project keeps getting wrong.
+    """
+    assert not looks_like_a_raw_tool_call(content)
+
+
+async def test_a_legitimate_answer_after_a_nudge_still_stands():
+    """The nudge working must not be turned into a failure by this path."""
+    provider = ScriptedProvider(
+        [
+            LLMResponse(content="I will search for that."),
+            LLMResponse(content="I could not find anything about that."),
+        ]
+    )
+
+    final = await build_graph(FakeRegistry(), provider).ainvoke(initial_state())
+
+    assert final["nudges"] == 1
+    assert final["messages"][-1]["content"] == "I could not find anything about that."
+    assert "unanswered" not in final["messages"][-1]

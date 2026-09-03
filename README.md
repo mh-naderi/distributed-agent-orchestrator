@@ -210,8 +210,9 @@ recorded at the MCP boundary" in `docs/architecture.md`.
 
 From the orchestrator, about the loop rather than individual tools:
 
-- `orchestrator_runs_total{outcome}` — `answered`, `truncated`, `failed`,
-  `no_tools`
+- `orchestrator_runs_total{outcome}` — `answered`, `truncated`, `unanswered`,
+  `failed`, `no_tools`, `rejected`. `unanswered` is a run that ended without
+  producing an answer at all, which must never be counted as one
 - `orchestrator_run_duration_seconds`
 - `orchestrator_run_iterations` — runs clustering near the max-iteration
   guardrail mean the loop is regularly running out of road, which no per-tool

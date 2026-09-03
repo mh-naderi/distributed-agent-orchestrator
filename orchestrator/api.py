@@ -370,6 +370,14 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                                 ),
                             )
 
+                        elif node == "unanswered":
+                            # Not an answer, so not an answer event. The held
+                            # narration must not be flushed below.
+                            pending_answer = None
+                            outcome = "unanswered"
+                            message = messages[-1] if messages else {}
+                            yield _sse("unanswered", content=message.get("content", ""))
+
                         elif node == "truncate":
                             # A separate event, not an answer. The run ended
                             # because the guardrail fired, and calling that an

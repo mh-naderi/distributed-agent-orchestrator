@@ -18,6 +18,7 @@ MCP call over the network. LangGraph runs async nodes natively - the graph is
 driven with ainvoke() instead of invoke().
 """
 
+import json
 import logging
 
 from langgraph.graph import END, StateGraph
@@ -92,6 +93,36 @@ Never fill a gap with your own knowledge."""
 
 
 SYNTHETIC_PROMPTS = frozenset({NUDGE_PROMPT, REGROUND_PROMPT})
+
+
+def looks_like_a_raw_tool_call(content: str) -> bool:
+    """
+    Is this "answer" actually a tool call the model typed out as text?
+
+    Narrowly the JSON case, and deliberately so. A model narrating in prose - "I
+    will now search for that" - is what the nudge is for, and catching prose
+    reliably would need the lexical guessing this project keeps getting wrong.
+    A payload that parses as JSON and carries a tool name is not a judgement
+    call: no answer to a user's question looks like that.
+
+    Observed after the nudge had already fired and spent its budget: the run
+    ended with {"name": "retrieve", "arguments": {"query": ...}} as its answer,
+    and the page would have rendered that as the result.
+    """
+    text = (content or "").strip()
+    if not text.startswith(("{", "[")):
+        return False
+
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+
+    candidates = payload if isinstance(payload, list) else [payload]
+    return any(
+        isinstance(item, dict) and ("name" in item or "tool_calls" in item)
+        for item in candidates
+    )
 
 
 def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
@@ -191,6 +222,34 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
                         "and the last requested tool calls were not executed."
                     ),
                     "truncated": True,
+                }
+            ]
+        }
+
+    async def note_unanswered(state: AgentState) -> dict:
+        """
+        Terminal node for a run that never produced an answer.
+
+        Same reasoning as note_truncation: the loop stopped for a real reason
+        and had to say so rather than let the last thing written stand as a
+        result. Here the last thing written was a tool call in text form, after
+        the nudge had already asked once and been ignored.
+
+        The narration is replaced rather than passed along. It is not an answer,
+        and the failure this project keeps returning to is a non-answer that
+        reaches a consumer looking exactly like one.
+        """
+        logger.warning("run ended on a narrated tool call; reporting it as unanswered")
+        return {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": (
+                        "No answer was produced. The model wrote out a tool call "
+                        "instead of making one, was asked again, and did the same. "
+                        "This is a failure to answer, not an answer."
+                    ),
+                    "unanswered": True,
                 }
             ]
         }
@@ -311,6 +370,11 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
         if state.get("nudges", 0) < MAX_NUDGES and not _acted_this_turn(state["messages"]):
             return "nudge"
 
+        # The nudge has already been spent and the model is still typing out a
+        # tool call. Ending here would publish that payload as the answer.
+        if looks_like_a_raw_tool_call(state["messages"][-1].get("content", "")):
+            return "unanswered"
+
         # Tools ran and every one of them reported having nothing. Whatever the
         # model just wrote, it was not built on evidence, so it gets one chance
         # to say so. Checked after the nudge so a turn with no tool call is
@@ -329,6 +393,7 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
     graph.add_node("truncate", note_truncation)
     graph.add_node("nudge", nudge)
     graph.add_node("reground", reground)
+    graph.add_node("unanswered", note_unanswered)
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges(
@@ -339,6 +404,7 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
             "truncated": "truncate",
             "nudge": "nudge",
             "reground": "reground",
+            "unanswered": "unanswered",
             "end": END,
         },
     )
@@ -346,5 +412,6 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
     graph.add_edge("truncate", END)
     graph.add_edge("nudge", "reason")
     graph.add_edge("reground", "reason")
+    graph.add_edge("unanswered", END)
 
     return graph.compile()

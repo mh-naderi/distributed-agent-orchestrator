@@ -465,6 +465,43 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## When asking again does not work
+
+The nudge asks once when the model writes out a tool call instead of making one.
+Measured today: sometimes the model does it again. The nudge budget is spent,
+`should_continue` returns "end", and the run finishes with
+
+```json
+{"name": "retrieve", "arguments": {"query": "Quazzlemint Foundation 2019 report"}}
+```
+
+as its answer. The API holds the first narration back precisely so it never
+reaches the page - and then publishes the second one, because by then it is the
+final message and looks like a result.
+
+A terminal node replaces it with an explicit non-answer, the same shape as the
+max-iteration stop notice, and the run is counted as `unanswered` rather than
+`answered`. A dashboard that cannot tell those apart reports a healthy system
+that is publishing tool calls as results.
+
+### Only the unambiguous case
+
+`looks_like_a_raw_tool_call` catches a payload that parses as JSON and carries a
+tool name. It does not attempt prose - "I will now search for that" - even though
+that is the more common narration, because the nudge already covers it and
+catching prose reliably means the lexical guessing this project has got wrong
+twice already.
+
+The asymmetry decides it. A missed narration ends one run badly. A false positive
+replaces a real answer with a failure notice, which is worse than the bug being
+fixed, so the detector only fires on something no answer to a human question
+could ever look like.
+
+Verified with fakes at both the graph and the stream level rather than in the
+cluster: provoking it needs the model to narrate twice in a row, which is not
+reliably reproducible on demand. The happy path was checked against the deployed
+service.
+
 ## The guardrail for answering from nothing
 
 Every fix so far made the corpus honest: a relevance floor so a far neighbour is

@@ -642,3 +642,50 @@ async def test_the_loop_nudges_at_most_once(wire):
     events = await collect("anything")
 
     assert [name for name, _ in events].count("nudge") == 1
+
+
+async def test_a_narration_that_survives_the_nudge_is_reported_as_unanswered(wire):
+    """
+    The stream is where this bug would have been visible: the page would have
+    rendered {"name": "retrieve", ...} as the model's answer. Like the stop
+    notice, this is deliberately NOT an answer event, so the UI can style it
+    differently and the harness can tell a failure from a result.
+    """
+
+    class AlwaysNarrates:
+        async def chat(self, messages, tools):
+            return LLMResponse(
+                content='{"name": "retrieve", "arguments": {"query": "x"}}'
+            )
+
+    wire(AlwaysNarrates())
+
+    events = await collect("what did they conclude?")
+    names = [name for name, _ in events]
+
+    assert "unanswered" in names
+    assert "answer" not in names, "a narration must not be presented as an answer"
+    assert names[-1] == "done"
+
+    payload = dict(events)["unanswered"]
+    assert "not an answer" in payload["content"]
+    assert "retrieve" not in payload["content"], "the narration itself must not be echoed"
+
+
+async def test_an_unanswered_run_is_counted_separately(wire):
+    """
+    Same reasoning as the truncated label: a run that failed to answer must not
+    be indistinguishable from one that answered, or the dashboard reports a
+    healthy system that is publishing tool calls as results.
+    """
+
+    class AlwaysNarrates:
+        async def chat(self, messages, tools):
+            return LLMResponse(content='{"name": "retrieve", "arguments": {}}')
+
+    wire(AlwaysNarrates())
+
+    before = runs("unanswered")
+    await collect("what did they conclude?")
+
+    assert runs("unanswered") == before + 1
