@@ -112,7 +112,14 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
     blank lines is stored as separate documents."""
     count = store.index(chunk(texts), source)
     DOCUMENTS_INDEXED.set(store.count())
-    return f"Indexed {count} document(s) from {source}. Corpus now holds {store.count()}."
+    # Do not echo the caller's label back as though it were applied. A document
+    # that names its own origin keeps that instead, and saying otherwise would
+    # tell the model its label stuck when it did not.
+    return (
+        f"Indexed {count} document(s); each is filed under the origin named in its "
+        f"own Source: line where it has one, and under {source!r} otherwise. "
+        f"Corpus now holds {store.count()}."
+    )
 
 
 @mcp.tool()

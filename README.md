@@ -350,12 +350,20 @@ because nearest-neighbour search always returns *k* rows, and the judge scored
 grounding 5 correctly - every claim was supported by the tool output, which was
 about someone else entirely.
 
-A measured relevance floor (`RETRIEVAL_MAX_DISTANCE`, default 0.70) now makes
-`retrieve` decline a neighbour that is merely nearest. It fixed the corpus half
-and not the whole: the model falls through to `search_web` and still
-misattributes real reports in 2 runs out of 3. The remaining cause is that a
-search's *query* becomes the stored document's provenance. See "The corpus
-learned to vouch for a fiction" in `docs/architecture.md`.
+Two fixes followed. A measured relevance floor (`RETRIEVAL_MAX_DISTANCE`,
+default 0.70) makes `retrieve` decline a neighbour that is merely nearest. And
+provenance now belongs to the document rather than the batch: a document's own
+`Source:` line wins over whatever the caller says the batch is about, so a query
+can no longer become a claim. Counting the corpus found two producers of bad
+labels — the research agent's auto-indexing, and the model itself, which passes
+the query as the source when it calls `index_documents`. Fixing it in the store
+covers both.
+
+Measured, not assumed: fabrication went from 2 runs in 3 to 1 in 6, and the
+judge began to notice — grounding had been a flat 5 on an invented answer and
+now ranges 1 to 5. Still not solved, and a first sample of three clean runs
+would have said otherwise. See "The corpus learned to vouch for a fiction" in
+`docs/architecture.md`.
 
 This is the case the whole project is organised around, and it is left honest
 about its own state rather than adjusted until it passes.

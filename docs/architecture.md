@@ -531,7 +531,47 @@ about what the documents are: any search for a false premise files real content
 under a label asserting it. That is the same corpus-pollution failure as
 "Stop reporting a failed search as an absence", one level deeper - there the
 stored text was a failure message, here it is real text with a lying label.
-Deliberately left for its own change rather than bundled in.
+
+### Provenance belongs to the document, not to the batch
+
+The label was a property of the *call*: one string covering everything sent. So
+whatever the caller believed the batch was about got stamped on every document in
+it. A document's own `Source:` line cannot lie in that direction - it names the URL
+the text actually came from - so `provenance_of` prefers it, and the caller's
+string is demoted to a fallback for text with no origin of its own.
+
+Putting the rule in the store rather than in the research agent was not tidiness.
+Counting the corpus turned up **two** producers of bad labels:
+
+| documents | source | who wrote it |
+|---|---|---|
+| 24 | `web-search: Quazzlemint Foundation 2019 report` | the research agent's auto-indexing |
+| 6 | `Quazzlemint Foundation 2019 report` | **the model**, choosing the argument itself |
+
+The second was not anticipated. The system prompt tells the model to call
+`index_documents` after a search, and it passes the query as the source, because
+that is the obvious thing to write. A fix in the research agent would have closed
+one path and left the other open. In the store it covers both, and any future
+caller as well - verified live by indexing a document with a deliberately
+misleading label and finding it stored under its own URL instead.
+
+For the same reason `index_documents` no longer echoes the caller's label back in
+its confirmation. Reporting "indexed from X" when X was discarded would tell the
+model its label stuck.
+
+### What it actually bought, measured
+
+Fabrication on `honest-ignorance` went from 2 runs in 3 to 1 in 6, and the judge
+began to see it: grounding had been a flat 5 while the answer was invented, and
+now ranges from 1 to 5, with one run's unsupported-claim budget failing outright.
+The signal improved along with the behaviour.
+
+It is not solved. One run in six still fabricated a report title. Both samples are
+small, and a first sample of three post-fix runs showed no fabrications at all -
+reading a fix into that would have repeated exactly the mistake documented at the
+top of this section, where one observation said the case passed. The honest
+statement is that the contamination path is closed and the model's remaining
+willingness to attribute a real document to a name it was asked about is not.
 
 ## Decision: a failed search is not an absence
 

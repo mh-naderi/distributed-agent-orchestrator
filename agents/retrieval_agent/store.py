@@ -23,6 +23,7 @@ each pod writes to its own file).
 """
 
 import logging
+import re
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -41,6 +42,35 @@ EMBEDDING_DIM = 768
 # In Kubernetes this path lives on a PersistentVolume; locally it's just a file.
 # Same code either way - the difference is entirely in where the path points.
 DB_PATH = os.environ.get("RETRIEVAL_DB_PATH", "data/retrieval.db")
+
+
+# A document that names its own origin is trusted over anything the caller says
+# about it. Search results carry a trailing "Source: <url>" line for exactly this
+# reason.
+SOURCE_LINE = re.compile(r"^Source:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def provenance_of(text: str, fallback: str) -> str:
+    """
+    Where this specific document came from, preferring what it says itself.
+
+    WHY THIS EXISTS. The caller used to label a whole batch with one string, and
+    the research agent passed the search QUERY: source="web-search: Quazzlemint
+    Foundation 2019 report". That foundation does not exist. DuckDuckGo returned
+    loose matches to real foundations' reports anyway, and they were stored under
+    a label asserting they were about the fictional one. 18 of 130 documents were
+    real content filed under a fiction, and a later retrieve handed them back as
+    evidence - a question became a claim about what the documents were.
+
+    A document's own "Source:" line cannot lie in that direction: it names the URL
+    the text actually came from. The caller's label is now only a fallback, for
+    text that carries no origin of its own.
+
+    The last match wins, because the line is appended after the body and a body
+    can quote anything.
+    """
+    matches = SOURCE_LINE.findall(text)
+    return matches[-1] if matches else fallback
 
 
 def chunk(texts: list[str]) -> list[str]:
@@ -192,6 +222,10 @@ class VectorStore:
         """
         Embed and store documents. Returns how many were NEWLY stored.
 
+        `source` is a FALLBACK, not a label applied to everything. Each document
+        that names its own origin keeps it - see provenance_of for the corpus
+        contamination that taught us the difference.
+
         Text already in the corpus is skipped - see _new_texts_only. The
         return value is therefore a count of what changed, not of what was
         submitted, which is what a caller checking "did this do anything"
@@ -225,7 +259,7 @@ class VectorStore:
                     )
                 cursor = db.execute(
                     "INSERT INTO documents (text, source, created_at) VALUES (?, ?, ?)",
-                    (text, source, now),
+                    (text, provenance_of(text, source), now),
                 )
                 # Reuse the documents row id as the vector rowid so the two
                 # tables line up without a separate mapping.

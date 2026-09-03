@@ -328,8 +328,14 @@ def search_web(query: str) -> str:
     # Only real results are stored. A message explaining that a search found
     # nothing is not a document, and indexing it meant a later retrieve could
     # return the record of a failed search as though it were evidence.
+    #
+    # The label is "web-search", not the query. Passing the query made every
+    # stored document claim to be ABOUT what was asked, so a search for something
+    # that does not exist filed real documents under its name and a later
+    # retrieve returned them as evidence. Each result carries its own "Source:"
+    # line, and the retrieval agent prefers that - see provenance_of in store.py.
     if outcome.indexable:
-        stored = index_results(outcome.text, source=f"web-search: {query}")
+        stored = index_results(outcome.text, source="web-search")
         RESULTS_INDEXED.labels(status="stored" if stored else "skipped").inc()
     else:
         RESULTS_INDEXED.labels(status="not_indexable").inc()

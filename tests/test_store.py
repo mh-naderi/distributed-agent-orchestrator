@@ -272,3 +272,79 @@ def test_ordering_survives_filtering(store):
 
     distances = [hit["distance"] for hit in hits]
     assert distances == sorted(distances), "nearest must still come first"
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+# A document's source used to be whatever the caller said about the whole batch,
+# and the research agent said the search QUERY. A search for something that does
+# not exist therefore filed real documents under its name.
+
+
+def test_a_document_that_names_its_origin_keeps_it(store):
+    store.index(
+        ["2019 Report\nGrants supported exemplary work.\nSource: https://example.org/a.pdf"],
+        "web-search",
+    )
+
+    hit = store.retrieve("grants")[0]
+
+    assert hit["source"] == "https://example.org/a.pdf"
+
+
+def test_the_callers_label_is_only_a_fallback(store):
+    store.index(["kubernetes runs containers"], "eval-fixture")
+
+    assert store.retrieve("kubernetes")[0]["source"] == "eval-fixture"
+
+
+def test_each_document_in_a_batch_gets_its_own_origin(store):
+    """
+    The batch is the unit the caller sends; the document is the unit that gets a
+    source. Collapsing the two is what let one label speak for five results.
+    """
+    store.index(
+        [
+            "kubernetes primer\nSource: https://example.org/k8s",
+            "protocol primer\nSource: https://example.net/proto",
+        ],
+        "web-search",
+    )
+
+    by_text = {hit["text"][:10]: hit["source"] for hit in store.retrieve("kubernetes", k=5)}
+
+    assert by_text["kubernetes"] == "https://example.org/k8s"
+    assert by_text["protocol p"] == "https://example.net/proto"
+
+
+def test_a_false_premise_query_cannot_become_provenance(store):
+    """
+    The exact contamination, reproduced. A search for a foundation that does not
+    exist returns real documents about a different one; they must not be stored
+    under a label asserting they are about the fictional entity.
+    """
+    result = (
+        "2019 Report - assets.ctfassets.net\n"
+        "Foundation grants in 2019 supported exemplary work.\n"
+        "Source: https://assets.ctfassets.net/mellonannualreport_2019.pdf"
+    )
+
+    store.index([result], "web-search")
+
+    hit = store.retrieve("foundation grants 2019")[0]
+    assert "Quazzlemint" not in hit["source"]
+    assert hit["source"] == "https://assets.ctfassets.net/mellonannualreport_2019.pdf"
+
+
+def test_a_quoted_source_line_in_the_body_does_not_win(store):
+    """The real origin is appended last, so the last line is the one that counts."""
+    store.index(
+        [
+            "kubernetes notes\nSomeone wrote Source: https://example.org/quoted\n"
+            "Source: https://example.org/real"
+        ],
+        "web-search",
+    )
+
+    assert store.retrieve("kubernetes")[0]["source"] == "https://example.org/real"
