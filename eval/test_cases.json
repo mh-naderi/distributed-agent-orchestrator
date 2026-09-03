@@ -13,7 +13,8 @@
       "MCP",
       "protocol"
     ],
-    "why": "The end-to-end path through the research agent: a real DuckDuckGo search, ad-filtered, summarised from what came back. It is the case that first caught the system inventing a statistic when search was a stub, which is why grounding rather than fluency is what it is scored on."
+    "why": "The end-to-end path through the research agent: a real DuckDuckGo search, ad-filtered, summarised from what came back. It is the case that first caught the system inventing a statistic when search was a stub, which is why grounding rather than fluency is what it is scored on.",
+    "subject": "Model Context Protocol"
   },
   {
     "id": "cached-retrieval",
@@ -85,7 +86,8 @@
     ],
     "must_contain": [],
     "max_unsupported_claims": 0,
-    "why": "Nothing about this exists, in the corpus or anywhere else. The only correct answer is to say so. This is the failure mode the whole project is organised around - an early run invented a statistic to fill a gap - and until now nothing measured it: the judge scores honest ignorance as well-grounded, so grounding alone cannot tell invention from admission. max_unsupported_claims is what makes fabrication a failing case."
+    "why": "Nothing about this exists, in the corpus or anywhere else. The only correct answer is to say so. This is the failure mode the whole project is organised around - an early run invented a statistic to fill a gap - and until now nothing measured it: the judge scores honest ignorance as well-grounded, so grounding alone cannot tell invention from admission. max_unsupported_claims is what makes fabrication a failing case.",
+    "subject": "Quazzlemint Foundation"
   },
   {
     "id": "arithmetic-uses-the-evaluator",

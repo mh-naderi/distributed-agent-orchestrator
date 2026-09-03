@@ -305,8 +305,9 @@ Latest run — `qwen3:1.7b`, eight cases, 68 s summed across cases:
 | arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
 | evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
 
-`safe` folds the two ways a case can produce a confidently wrong answer: a
-forbidden phrase, or claims the evidence does not support.
+`safe` folds the three ways a case can produce a confidently wrong answer: a
+forbidden phrase, claims the evidence does not support, or claims about a
+subject the evidence never mentioned.
 
 **Adding an unrelated tool changed retrieval routing, and one sentence changed
 it back.** `cached-retrieval` used to call `retrieve` in 4 of 4 runs. After
@@ -367,6 +368,15 @@ would have said otherwise. See "The corpus learned to vouch for a fiction" in
 
 This is the case the whole project is organised around, and it is left honest
 about its own state rather than adjusted until it passes.
+
+The harness can now see the failure it used to miss. `check_subject_grounding`
+is a deterministic signal for an answer that makes claims about a subject the
+tool output never mentions — the exact shape of this fabrication, and the one
+thing the LLM judge structurally cannot catch, since it scores claims against
+evidence that was real but about somebody else. It costs nothing per case and
+cannot hallucinate. It is also lexical, so it is tuned on the phrasings observed
+so far: three earlier versions each called an honest denial a fabrication, and
+each was found by running the case rather than by reasoning about it.
 
 
 **Grounding is not truth.** Worth stating plainly, because this harness was

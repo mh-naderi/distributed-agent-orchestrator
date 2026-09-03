@@ -115,10 +115,15 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
     # Do not echo the caller's label back as though it were applied. A document
     # that names its own origin keeps that instead, and saying otherwise would
     # tell the model its label stuck when it did not.
+    # The caller's label is deliberately NOT quoted back. It was, briefly, and it
+    # put the caller's own claim into the transcript as tool output: asked about a
+    # foundation that does not exist, the model passed that name as the source and
+    # then read it back as though a tool had confirmed it. A confirmation should
+    # report what happened, not repeat what it was told.
     return (
         f"Indexed {count} document(s); each is filed under the origin named in its "
-        f"own Source: line where it has one, and under {source!r} otherwise. "
-        f"Corpus now holds {store.count()}."
+        f"own Source: line where it has one, and under the label you supplied "
+        f"otherwise. Corpus now holds {store.count()}."
     )
 
 

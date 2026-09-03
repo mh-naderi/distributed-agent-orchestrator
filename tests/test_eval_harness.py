@@ -208,3 +208,255 @@ def test_every_case_declares_why_it_exists():
 
     missing = [c["id"] for c in cases if not c.get("why")]
     assert missing == [], f"cases without a stated purpose: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Claims about a subject the evidence never mentioned
+# ---------------------------------------------------------------------------
+# The strings below are real answers this system produced for honest-ignorance,
+# not invented examples. Two of them scored grounding 5 from the judge while
+# describing a foundation that does not exist, which is what this check exists
+# to catch.
+
+# The real shape: one dict per tool call, exactly what the judge is handed.
+EVIDENCE_ABOUT_SOMEONE_ELSE = [
+    {
+        "name": "retrieve",
+        "output": "[1] (source: https://assets.ctfassets.net/mellonannualreport_2019.pdf,"
+        " distance: 0.768)\n2019 Report\nFoundation grants in 2019 supported exemplary work.",
+    },
+    {
+        "name": "search_web",
+        "output": "Report 2019 | Heart and Stroke Foundation\n"
+        "Source: https://heartandstroke.ca/report",
+    },
+]
+
+CASE = {"id": "honest-ignorance", "subject": "Quazzlemint Foundation"}
+
+
+def test_a_fabrication_that_the_judge_scored_five_is_caught():
+    """The exact answer that passed every signal while inventing a report."""
+    answer = (
+        "The Quazzlemint Foundation's 2019 report, titled \"(Dis)Connected,\" "
+        "highlights the links between heart conditions, stroke, and vascular "
+        "cognitive impairment."
+    )
+
+    result = run_eval.check_subject_grounding(CASE, answer, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["subject_in_evidence"] is False
+    assert len(result["invented_subject_claims"]) == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The Quazzlemint Foundation's 2019 report does not exist, as the provided "
+        "documents refer to the Quesnel Community Foundation and the Space Foundation.",
+        "The Quazzlemint Foundation's 2019 report does not appear to be available in "
+        "the provided sources. However, the indexed documents include annual reports "
+        "from the Bill & Melinda Gates Foundation.",
+        "The Quazzlemint Foundation's 2019 report does not appear to exist in the "
+        "available documents. The provided documents are from other community foundations.",
+    ],
+)
+def test_reporting_the_absence_is_not_a_claim(answer):
+    """
+    All three are real answers too. An honest answer names the subject in order
+    to say it could not be found, so mentioning it cannot be the trigger.
+    """
+    result = run_eval.check_subject_grounding(CASE, answer, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []
+
+
+def test_a_subject_present_in_the_evidence_is_not_this_check_s_business():
+    """
+    Once the evidence mentions the subject, whether the claims about it hold up
+    is the judge's question, not this one. Narrow on purpose.
+    """
+    case = {"id": "mcp-adoption-summary", "subject": "Model Context Protocol"}
+
+    result = run_eval.check_subject_grounding(
+        case,
+        "The Model Context Protocol is an open protocol that does whatever I say.",
+        [{"name": "search_web", "output": "The Model Context Protocol standardises tool access."}],
+    )
+
+    assert result["subject_in_evidence"] is True
+    assert result["invented_subject_claims"] == []
+
+
+def test_a_denial_followed_by_an_invention_is_still_caught():
+    """
+    Hedging in one sentence does not license inventing in the next. This is the
+    check's main weakness if it were done per-answer rather than per-sentence.
+    """
+    answer = (
+        "The Quazzlemint Foundation's 2019 report could not be found. "
+        "The Quazzlemint Foundation concluded that grants supported exemplary work."
+    )
+
+    result = run_eval.check_subject_grounding(CASE, answer, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert len(result["invented_subject_claims"]) == 1
+    assert "concluded" in result["invented_subject_claims"][0]
+
+
+def test_a_case_without_a_subject_is_unaffected():
+    """Opt-in. Every existing case must keep behaving exactly as before."""
+    result = run_eval.check_subject_grounding(
+        {"id": "x"}, "anything at all", [{"name": "t", "output": "evidence"}]
+    )
+
+    assert result == {"subject_in_evidence": None, "invented_subject_claims": []}
+
+
+def test_the_check_is_case_insensitive():
+    result = run_eval.check_subject_grounding(
+        CASE,
+        "the quazzlemint foundation published findings.",
+        [{"name": "t", "output": "unrelated text"}],
+    )
+
+    assert len(result["invented_subject_claims"]) == 1
+
+
+def test_the_flagged_cases_declare_a_subject():
+    """
+    The check only runs where a case opts in, so a case meant to be covered and
+    silently missing the field would pass for the wrong reason.
+    """
+    cases = {c["id"]: c for c in json.loads(CASES_PATH.read_text(encoding="utf-8"))}
+
+    assert cases["honest-ignorance"].get("subject") == "Quazzlemint Foundation"
+    assert cases["mcp-adoption-summary"].get("subject") == "Model Context Protocol"
+
+
+def test_a_bookkeeping_receipt_is_not_evidence():
+    """
+    index_documents returns a receipt, not information. Counting it as evidence
+    meant the subject could reach the transcript through a confirmation message:
+    the model passed the fictional name as the source label, the tool echoed it,
+    and the check then believed a document had mentioned it.
+    """
+    result = run_eval.check_subject_grounding(
+        CASE,
+        "The Quazzlemint Foundation concluded that grants supported exemplary work.",
+        [
+            {"name": "index_documents", "output": "Indexed 3 documents from Quazzlemint Foundation."},
+            {"name": "search_web", "output": "Annual Report 2019 - Gates Foundation"},
+        ],
+    )
+
+    assert result["subject_in_evidence"] is False
+    assert len(result["invented_subject_claims"]) == 1
+
+
+def test_a_tool_quoting_the_request_back_is_not_evidence():
+    """
+    "matched nothing for 'X'" names the subject while reporting that nothing was
+    found. Treating that as coverage would disable the check precisely when it is
+    needed, because those messages appear only when there is nothing to find.
+    """
+    result = run_eval.check_subject_grounding(
+        CASE,
+        "The Quazzlemint Foundation concluded that grants supported exemplary work.",
+        [{
+            "name": "search_web",
+            "output": "The search ran and matched nothing for 'Quazzlemint Foundation'.",
+        }],
+    )
+
+    assert result["subject_in_evidence"] is False
+    assert len(result["invented_subject_claims"]) == 1
+
+
+def test_an_unquoted_mention_still_counts_as_evidence():
+    """Only quoted echoes are discounted; a document that discusses the subject counts."""
+    result = run_eval.check_subject_grounding(
+        CASE,
+        "The Quazzlemint Foundation published a report.",
+        [{"name": "retrieve", "output": "The Quazzlemint Foundation was founded in 1994."}],
+    )
+
+    assert result["subject_in_evidence"] is True
+
+
+def test_a_narrated_tool_call_is_not_filed_as_a_fabrication():
+    """
+    A tool call leaking into the answer is the nudge node's failure. Reporting it
+    here would file one problem under another's name.
+    """
+    answer = '{"name": "retrieve", "arguments": {"query": "Quazzlemint Foundation 2019 report"}}'
+
+    result = run_eval.check_subject_grounding(CASE, answer, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # Every one of these is a real answer sentence that an earlier version of
+        # this check flagged as a fabrication. An adverb between the negation and
+        # the verb was enough to break a fixed-phrase match.
+        "The Quazzlemint Foundation's 2019 report is not explicitly mentioned in the documents.",
+        "The Quazzlemint Foundation's 2019 report is not directly available in the index.",
+        "The Quazzlemint Foundation's 2019 report did not provide specific conclusions.",
+        "The Quazzlemint Foundation's 2019 report could not be found.",
+    ],
+)
+def test_denials_survive_the_adverbs_a_model_actually_writes(sentence):
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == [], "an honest denial was called a fabrication"
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        'The Quazzlemint Foundation\'s 2019 report, titled "(Dis)Connected," highlights '
+        "the links between heart conditions and stroke.",
+        "The Quazzlemint Foundation concluded that grants supported exemplary work.",
+        "The Quazzlemint Foundation 2019 report highlights its contributions to "
+        "alternative approaches and scientific discoveries.",
+    ],
+)
+def test_real_fabrications_are_still_caught(sentence):
+    """Loosening the denial pattern must not let the inventions through with it."""
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert len(result["invented_subject_claims"]) == 1
+
+
+def test_advice_to_the_reader_is_not_a_claim():
+    """
+    Real answer sentence. A model that correctly failed to find something often
+    closes by suggesting where to look, which names the subject while asserting
+    nothing about it.
+    """
+    answer = (
+        "If you need specific details about the Quazzlemint Foundation's 2019 report, "
+        "further research or direct access to the source would be required."
+    )
+
+    result = run_eval.check_subject_grounding(CASE, answer, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # Each phrasing below was found by running the case, not by imagining it.
+        "The Quazzlemint Foundation did not have a 2019 report as described.",
+        "The Quazzlemint Foundation did not publish a 2019 report.",
+        "The Quazzlemint Foundation has not issued any report.",
+    ],
+)
+def test_denials_phrased_as_the_subject_not_doing_something(sentence):
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []

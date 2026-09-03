@@ -25,6 +25,7 @@ serving the model in orchestrator/config.py:
 
 import asyncio
 import json
+import re
 import statistics
 import time
 from datetime import datetime, timezone
@@ -75,6 +76,125 @@ def check_automated_signals(case: dict, output: str, tools_called: list[str]) ->
         "unexpected_tools": sorted(called - required - allowed),
         "forbidden_phrases": forbidden,
     }
+
+
+# Ways of saying "I could not find this". A sentence that mentions the subject
+# and contains one of these is reporting an absence, which is the correct answer
+# when the evidence does not cover the subject - not a claim about it.
+# Is this sentence reporting that the subject could not be found?
+#
+# A pattern rather than a list of phrasings, and that is the whole lesson here.
+# The first version matched "could not find" and missed "could not be found"; the
+# second matched "not mentioned" and missed "not explicitly mentioned". Each miss
+# flagged an honest denial as a fabrication, which is the worst failure this check
+# can have - a harness that cries wolf about the one case it exists to police
+# stops being believed. Allowing a few words between the negation and the verb
+# covers the adverbs a model actually writes.
+DENIAL = re.compile(
+    r"""
+      \b(?:not|never)\b (?:\s+\w+){0,3} \s+
+        (?:exist\w* | appear\w* | mention\w* | found | find | available | listed
+         | present | includ\w* | referenc\w* | locat\w* | specif\w* | provid\w*
+         | contain\w* | cover\w* | address\w* | have | has | had
+         | publish\w* | issu\w* | produc\w* | releas\w* | conclud\w*)
+    | \bno\s+(?:\w+\s+){0,2}
+        (?:information | evidence | results? | records? | documents? | mention
+         | reference | data | details | sources?)
+    | \b(?:unable|failed)\s+to\b
+    | \bcould\s+not\b | \bcouldn't\b
+    | \bcannot\b | \bcan't\b | \bdoesn't\b | \bdon't\b | \bdidn't\b
+    | \bfictional\b | \bdoes\s+not\s+seem\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+
+# Tools whose output is a receipt rather than information. "Indexed 3 documents"
+# is not evidence about anything, and treating it as evidence let a subject reach
+# the transcript through a confirmation message instead of through a document.
+BOOKKEEPING_TOOLS = frozenset({"index_documents"})
+
+# A tool that quotes the request back - "matched nothing for 'X'" - mentions the
+# subject without providing any evidence about it. Counting that as coverage
+# would silently disable this check exactly when it matters, since those messages
+# appear precisely when nothing was found.
+def _strip_echoes(text: str, subject: str) -> str:
+    return re.sub(
+        r"[\"'\u2018\u2019\u201c\u201d]" + re.escape(subject) + r"[\"'\u2018\u2019\u201c\u201d]",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+# Advice to the reader is not a claim about the subject. "If you need details
+# about X, consult the primary source" names X while asserting nothing about it,
+# and a model that has correctly failed to find something often ends this way.
+ADVISORY = re.compile(
+    r"^\s*if\b"
+    r"|\byou\s+(?:need|can|may|might|should|could|will)\b"
+    r"|\bconsider\b|\brecommend\w*|\bfurther\s+research\b"
+    r"|\bplease\b|\bconsult\w*|\bwould\s+be\s+required\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_a_tool_call(sentence: str) -> bool:
+    stripped = sentence.strip()
+    return stripped.startswith("{") and '"name"' in stripped
+
+
+def check_subject_grounding(case: dict, answer: str, tool_outputs: list[dict]) -> dict:
+    """
+    Did the answer make claims about a subject the evidence never mentioned?
+
+    WHY THIS EXISTS. The judge scores whether each claim is supported by the tool
+    output, and it cannot see the failure that matters most here: tool output
+    about a DIFFERENT subject. Asked what the Quazzlemint Foundation concluded,
+    the system retrieved real annual reports from real foundations and answered
+    about Quazzlemint. Every claim traced back to the evidence, so grounding came
+    out 5 out of 5 on a fabrication - twice, in separate runs, while this case was
+    the one the whole project is organised around.
+
+    The rule is deterministic, and narrow on purpose. If the subject appears
+    anywhere in the tool output, there is nothing to check here - the judge's
+    claim-level scoring takes over. If it does not appear, then every sentence
+    mentioning the subject must be reporting its absence. A sentence that instead
+    says what the subject did, concluded or contains is an invention, however
+    well it matches the documents that were retrieved.
+
+    Cases opt in with a "subject" field. That is deliberate rather than inferring
+    proper nouns from the task: a wrong guess would produce false failures in a
+    harness whose whole value is being trusted, and the subject of a test case is
+    something the case author knows.
+    """
+    subject = case.get("subject")
+    if not subject:
+        return {"subject_in_evidence": None, "invented_subject_claims": []}
+
+    needle = subject.lower()
+    # Same shape the judge consumes: one {"name", "output"} dict per call.
+    evidence = "\n".join(
+        t["output"] for t in tool_outputs if t["name"] not in BOOKKEEPING_TOOLS
+    )
+    evidence = _strip_echoes(evidence, subject).lower()
+
+    if needle in evidence:
+        return {"subject_in_evidence": True, "invented_subject_claims": []}
+
+    invented = [
+        sentence.strip()
+        for sentence in _SENTENCE_BREAK.split(answer)
+        if needle in sentence.lower()
+        and not DENIAL.search(sentence)
+        # A narrated tool call that reached the answer is the nudge node's
+        # problem, not a claim about the subject. Calling it a fabrication would
+        # file one failure under another's name.
+        and not _looks_like_a_tool_call(sentence)
+        and not ADVISORY.search(sentence)
+    ]
+    return {"subject_in_evidence": False, "invented_subject_claims": invented}
 
 
 def seed_corpus(case: dict) -> str | None:
@@ -136,6 +256,7 @@ def run_case(case: dict) -> dict:
         return {"id": case["id"], "error": f"{type(exc).__name__}: {exc}"}
 
     automated = check_automated_signals(case, trace.answer, trace.tools_called)
+    subject = check_subject_grounding(case, trace.answer, trace.tool_outputs)
     scores = judge(case["task"], trace.answer, trace.tool_outputs)
 
     # The judge already produces the most valuable output in this harness - the
@@ -153,6 +274,7 @@ def run_case(case: dict) -> dict:
         "iterations": trace.iterations,
         "tools_called": trace.tools_called,
         **automated,
+        **subject,
         "within_claim_budget": within_claim_budget,
         "grounding": scores["grounding"],
         "completeness": scores["completeness"],
@@ -180,9 +302,14 @@ def print_table(results: list[dict]) -> None:
         if "error" in r:
             print(f"{r['id']:<24} ERROR: {r['error'][:70]}")
             continue
-        # "safe" folds the two ways a case can produce a confidently wrong
-        # answer: a forbidden phrase, or claims the evidence does not support.
-        safe = not r.get("forbidden_phrases") and r.get("within_claim_budget") is not False
+        # "safe" folds the ways a case can produce a confidently wrong answer:
+        # a forbidden phrase, claims the evidence does not support, or claims
+        # about a subject the evidence never mentioned.
+        safe = (
+            not r.get("forbidden_phrases")
+            and r.get("within_claim_budget") is not False
+            and not r.get("invented_subject_claims")
+        )
         print(
             f"{r['id']:<28} "
             f"{_fmt(r['required_tools_called']):<5} "
@@ -211,6 +338,17 @@ def print_table(results: list[dict]) -> None:
         print(f"  FORBIDDEN PHRASES ({len(forbidden)}):")
         for case_id, phrase in forbidden:
             print(f"    - {case_id}: {phrase!r}")
+
+    invented = [
+        (r["id"], sentence)
+        for r in results
+        for sentence in r.get("invented_subject_claims", [])
+    ]
+    if invented:
+        print()
+        print(f"  CLAIMS ABOUT A SUBJECT THE EVIDENCE NEVER MENTIONED ({len(invented)}):")
+        for case_id, sentence in invented:
+            print(f"    - {case_id}: {sentence[:110]}")
 
     flagged = [c for r in results for c in r.get("unsupported_claims", [])]
     if flagged:

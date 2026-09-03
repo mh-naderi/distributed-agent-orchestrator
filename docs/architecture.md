@@ -465,6 +465,75 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## A signal for claims about a subject the evidence never mentioned
+
+The judge scores whether each claim in an answer is supported by the tool output
+it was given. That is the right question, and it is blind to the failure that
+actually happened: tool output about a *different subject*. Asked what the
+Quazzlemint Foundation concluded, the system retrieved real annual reports from
+real foundations and answered about Quazzlemint. Every claim traced back to the
+evidence, so grounding came out 5 of 5 on a fabrication - in the one case this
+project is organised around.
+
+`check_subject_grounding` is deterministic and narrow. A case opts in with a
+`subject` field; if the subject appears in the tool output there is nothing to
+check and the judge's claim-level scoring takes over; if it does not, every
+sentence mentioning the subject must be reporting its absence. A sentence that
+instead says what the subject did, concluded or contains is an invention, however
+well it matches the documents that came back.
+
+Opting in explicitly, rather than inferring proper nouns from the task, is
+deliberate. A wrong guess produces a false failure, and a harness that cries wolf
+about the case it exists to police stops being believed.
+
+### Three ways the first versions were wrong
+
+Each was found by running the case rather than by reasoning about it, and each
+was a false positive - an honest denial reported as a fabrication.
+
+| written | missed | because |
+|---|---|---|
+| `"could not find"` | "could not be found" | passive voice |
+| `"not mentioned"` | "not explicitly mentioned" | an adverb in between |
+| a verb list without `have` | "did not have a 2019 report" | denial phrased as the subject not doing something |
+
+The fix was to stop matching phrasings and match a pattern: a negation, up to
+three words, then a verb of existence or provision. The general lesson is that a
+lexical denial detector is never finished - it is tuned on the phrasings observed
+so far, and a model writes new ones. It is worth having anyway, because the
+alternative is a signal that only an LLM can produce, and this one costs nothing
+per case and cannot itself hallucinate.
+
+Two sentence types are excluded for the same reason: a narrated tool call that
+leaked into the answer is the nudge node's failure and filing it here would put
+one problem under another's name, and advice to the reader ("if you need details,
+consult the primary source") names the subject while asserting nothing about it.
+
+### The check found a bug in a fix from the same session
+
+Its first live run reported the subject as present in the evidence, which was
+true and should not have been. `index_documents` had just been changed to stop
+echoing the caller's label back - and the version shipped still quoted it in the
+confirmation text. The model passes the fictional name as the source label, so
+the tool's own receipt put that name into the transcript as tool output, and the
+check read it as coverage.
+
+So the receipt is now silent about the label, and the check ignores two things
+that are not evidence: output from bookkeeping tools, and a subject that appears
+only inside quotes, which is how every tool in this system echoes a request back
+("matched nothing for 'X'"). Counting an echo as coverage would disable the check
+exactly when it matters, since those messages appear only when nothing was found.
+
+### What it catches, measured
+
+Over six runs of `honest-ignorance` it flagged three, of which two were real -
+an invented summary of the report's findings, and a claim that the indexed
+documents related to the foundation - and one was a denial phrased with a verb
+the pattern did not yet cover, now added. The remaining runs were honest denials
+and correctly passed. The fabrication rate itself is unchanged; what changed is
+that the harness can now see it, where before it reported grounding 5 and moved
+on.
+
 ## The corpus learned to vouch for a fiction
 
 `honest-ignorance` asks what the Quazzlemint Foundation concluded in its 2019
