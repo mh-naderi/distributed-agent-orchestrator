@@ -335,17 +335,30 @@ neighbours, and it has to keep holding as neighbours are added. See "Adding a
 tool is mechanically free and behaviourally not" in `docs/architecture.md`.
 
 
-**`honest-ignorance` is the row left deliberately red.** Asked about a
-foundation that does not exist, the model answers from its own knowledge
-instead of searching, so the required-tool assertion fails. What it says is
-honest - grounding 5, nothing asserted beyond the evidence - and completeness
-is 3 precisely because there is no evidence to be complete about. The case is
-not adjusted to go green: an assertion rewritten until it passes measures the
-harness rather than the system.
+**`honest-ignorance` went green for the wrong reason, which is worse than
+red.** The table above was one run. Re-measured the next day, the case passed
+every automated check - required tool called, claim budget met, grounding 5,
+zero unsupported claims - while confidently reporting what a foundation that
+does not exist had concluded.
 
-It also stayed fixed in the way that matters. It used to end at iteration 1
-with a narrated tool call presented as an answer; it now runs to completion and
-declines cleanly.
+The system had poisoned its own corpus. An earlier run searched the web for
+"Quazzlemint Foundation 2019 report"; DuckDuckGo returned loose matches to real
+foundations' reports; `search_web` auto-indexed them under
+`source="web-search: Quazzlemint Foundation 2019 report"`. 18 of 130 documents
+were real content filed under a fictional entity. `retrieve` returned them,
+because nearest-neighbour search always returns *k* rows, and the judge scored
+grounding 5 correctly - every claim was supported by the tool output, which was
+about someone else entirely.
+
+A measured relevance floor (`RETRIEVAL_MAX_DISTANCE`, default 0.70) now makes
+`retrieve` decline a neighbour that is merely nearest. It fixed the corpus half
+and not the whole: the model falls through to `search_web` and still
+misattributes real reports in 2 runs out of 3. The remaining cause is that a
+search's *query* becomes the stored document's provenance. See "The corpus
+learned to vouch for a fiction" in `docs/architecture.md`.
+
+This is the case the whole project is organised around, and it is left honest
+about its own state rather than adjusted until it passes.
 
 
 **Grounding is not truth.** Worth stating plainly, because this harness was

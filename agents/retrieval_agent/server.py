@@ -38,6 +38,25 @@ MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 
+# How far a neighbour may be and still count as a match.
+#
+# MEASURED, not chosen. Against a 130-document corpus with nomic-embed-text,
+# best-hit L2 distances came out as:
+#
+#   queries the corpus really answers   0.568 - 0.641
+#   a question about an absent entity   0.768
+#   queries unrelated to anything here  1.025 - 1.078
+#
+# 0.70 is the midpoint of the gap between the first two, so it has roughly equal
+# room on either side. The cutoff is not a law - it is five genuine queries
+# against one corpus and one embedding model, which is why it is an environment
+# variable rather than a constant.
+#
+# Erring toward rejection is deliberate. A wrongly rejected match sends the model
+# to search_web, which is recoverable; a wrongly accepted one becomes a confident
+# answer about something the corpus never contained, which is not.
+MAX_MATCH_DISTANCE = float(os.environ.get("RETRIEVAL_MAX_DISTANCE", "0.70"))
+
 # stateless_http=True: no Mcp-Session-Id is issued, so every request stands
 # alone and any replica can serve any of them.
 #
@@ -113,15 +132,22 @@ def retrieve(query: str, k: int = 5) -> str:
     with five tool descriptions and losing. Guidance about WHEN to use a tool
     belongs next to the tool.
     """
-    hits = store.retrieve(query, k)
+    hits = store.retrieve(query, k, max_distance=MAX_MATCH_DISTANCE)
 
     if not hits:
         # Say so explicitly. An empty result that reads like a successful
         # answer is how a model ends up inventing one - exactly what the
         # stubbed search tool caused before it was made real.
+        #
+        # "Nothing close enough" rather than "nothing found", because the corpus
+        # usually did return neighbours and they were rejected as too far. Saying
+        # that plainly matters: the model must not read this as licence to answer
+        # from its own knowledge.
         return (
-            "No documents in the index match that query. "
-            "The index may be empty - try searching the web and indexing the results first."
+            "No documents in the index are close enough to that query to count as "
+            "a match. That is not evidence the subject does not exist - the corpus "
+            "simply does not cover it. Search the web, or say you could not find "
+            "it. Do not answer from your own knowledge."
         )
 
     return "\n\n".join(

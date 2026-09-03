@@ -237,7 +237,7 @@ class VectorStore:
         logger.info("indexed %d document(s) from %s", len(texts), source)
         return len(texts)
 
-    def retrieve(self, query: str, k: int = 5) -> list[dict]:
+    def retrieve(self, query: str, k: int = 5, max_distance: float | None = None) -> list[dict]:
         """
         Return the k documents closest to the query, nearest first.
 
@@ -246,6 +246,14 @@ class VectorStore:
         completely fine here - at this scale it's milliseconds, and the results
         are exact rather than approximate. Swapping to an approximate index is a
         problem to solve when there's a corpus big enough to need it.
+
+        max_distance drops neighbours that are merely nearest rather than
+        actually similar. Nearest-neighbour search always returns k rows if the
+        corpus holds k documents, so without a floor "closest" reads as "match"
+        and a question about something absent comes back with whatever happened
+        to be least unlike it. Defaults to None - the store stays policy-free and
+        the agent decides what counts as a match, because the right cutoff
+        depends on the embedding model rather than on storage.
         """
         query_embedding = self._embed([query])[0]
 
@@ -261,7 +269,13 @@ class VectorStore:
                 (serialize_float32(query_embedding), k),
             ).fetchall()
 
-        return [{"text": text, "source": source, "distance": distance} for text, source, distance in rows]
+        hits = [
+            {"text": text, "source": source, "distance": distance}
+            for text, source, distance in rows
+        ]
+        if max_distance is None:
+            return hits
+        return [hit for hit in hits if hit["distance"] <= max_distance]
 
     def count(self) -> int:
         """Number of documents currently indexed - used by tests and diagnostics."""

@@ -465,6 +465,74 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## The corpus learned to vouch for a fiction
+
+`honest-ignorance` asks what the Quazzlemint Foundation concluded in its 2019
+report. Nothing of the sort exists, so the only correct answer is to say so. The
+case is the one this project is organised around, and it stopped working in a way
+that no signal in the harness could see.
+
+Yesterday it failed by calling no tool at all and answering from memory. Today it
+**passes every automated check** - required tool called, claim budget met,
+grounding 5 out of 5, zero unsupported claims - while confidently reporting what
+the foundation concluded. The green row is worse than the red one was.
+
+What happened is a loop the system closed on itself:
+
+1. An earlier run searched the web for "Quazzlemint Foundation 2019 report".
+2. DuckDuckGo does not return nothing - it returns loose matches, in this case the
+   Mellon Foundation's real 2019 annual report and similar.
+3. `search_web` auto-indexed those results with `source=f"web-search: {query}"`,
+   filing real documents under a label naming a foundation that does not exist.
+4. `retrieve` later returned them, because nearest-neighbour search always returns
+   *k* rows if the corpus holds *k* documents.
+5. The model read the provenance label as confirmation and answered.
+6. The judge scored grounding 5, correctly: every claim *was* supported by the tool
+   output. The tool output was about a different organisation.
+
+A count of the corpus made the scale plain - 18 of 130 documents were real web
+content filed under a fictional entity, and that was before the runs measuring
+this added six more.
+
+### The relevance floor
+
+Distances were measured rather than guessed, best hit per query:
+
+| query class | best-hit L2 distance |
+|---|---|
+| queries the corpus really answers | 0.568 - 0.641 |
+| the absent entity | 0.768 |
+| queries unrelated to anything stored | 1.025 - 1.078 |
+
+`RETRIEVAL_MAX_DISTANCE` defaults to 0.70, the midpoint of the gap between the
+first two rows. Above it, a neighbour is reported as no match rather than as
+evidence. Erring toward rejection is deliberate: a wrongly rejected match sends
+the model to `search_web`, which is recoverable, while a wrongly accepted one
+becomes a confident answer about something the corpus never held.
+
+One measurement corrected a guess worth recording. The Xylophone Quarks Institute
+is also fictional, but it matches at 0.527 - closer than any genuine query - and
+that is *correct*, because the integration test indexes that literal text. The
+corpus really does hold documents about it. Only the Quazzlemint documents were
+contamination, and a check that assumed "fictional entity implies bad match"
+would have been wrong.
+
+### What the floor did not fix
+
+`retrieve` now declines the fiction, and `cached-retrieval` is unaffected - 3 runs
+out of 3, grounding 5. But the case still fabricates in 2 runs out of 3, because
+the model falls through to `search_web`, which returns real foundations' reports,
+and attributes those to Quazzlemint instead. Grounding fell from 5 to 3, so the
+judge senses the weaker support, but the answer is still wrong.
+
+The floor addresses the corpus vouching for a fiction. It does not address the
+cause, which is that `source=f"web-search: {query}"` turns a question into a claim
+about what the documents are: any search for a false premise files real content
+under a label asserting it. That is the same corpus-pollution failure as
+"Stop reporting a failed search as an absence", one level deeper - there the
+stored text was a failure message, here it is real text with a lying label.
+Deliberately left for its own change rather than bundled in.
+
 ## Decision: a failed search is not an absence
 
 The research agent's job is to bring back evidence. The failure that matters is

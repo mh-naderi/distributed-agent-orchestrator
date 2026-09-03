@@ -206,3 +206,69 @@ def test_chunking_improves_match_quality(tmp_path):
     assert blobbed.count() == 1
     assert chunked.count() == 3
     assert chunked.retrieve("protocol", k=1)[0]["distance"] < blobbed.retrieve("protocol", k=1)[0]["distance"]
+
+
+# ---------------------------------------------------------------------------
+# The relevance floor
+# ---------------------------------------------------------------------------
+# Nearest-neighbour search always returns k rows if the corpus holds k
+# documents, so "closest" silently reads as "match". That is not a hypothetical:
+# a question about an entity that does not exist came back with real documents
+# at distance 0.768, and the model answered from them.
+
+
+def test_without_a_floor_a_far_neighbour_is_still_returned(store):
+    """The behaviour the floor exists to bound. Kept as the baseline it is."""
+    store.index(["kubernetes runs containers"], "fixture")
+
+    hits = store.retrieve("protocol")
+
+    assert len(hits) == 1, "nearest-neighbour returns something regardless"
+    assert hits[0]["distance"] > 1.0
+
+
+def test_a_far_neighbour_is_dropped_when_a_floor_is_set(store):
+    store.index(["kubernetes runs containers"], "fixture")
+
+    assert store.retrieve("protocol", max_distance=0.5) == []
+
+
+def test_a_genuine_match_survives_the_floor(store):
+    store.index(["kubernetes runs containers"], "fixture")
+
+    hits = store.retrieve("kubernetes", max_distance=0.5)
+
+    assert len(hits) == 1
+    assert "kubernetes" in hits[0]["text"]
+
+
+def test_the_floor_keeps_the_near_and_drops_the_far_in_one_query(store):
+    """
+    The partial case. A query can match one document well and another barely;
+    dropping only the second is the whole point, and returning k rows because
+    k rows exist is what produced the fabrication.
+    """
+    store.index(["kubernetes runs containers", "protocol defines messages"], "fixture")
+
+    hits = store.retrieve("kubernetes", max_distance=0.5)
+
+    assert len(hits) == 1
+    assert "kubernetes" in hits[0]["text"]
+
+
+def test_the_floor_is_inclusive_at_the_boundary(store):
+    """An exact match sits at distance 0, so a floor of 0 must not reject it."""
+    store.index(["kubernetes runs containers"], "fixture")
+
+    assert len(store.retrieve("kubernetes", max_distance=0.0)) == 1
+
+
+def test_ordering_survives_filtering(store):
+    store.index(
+        ["kubernetes runs containers", "kubernetes and protocol together"], "fixture"
+    )
+
+    hits = store.retrieve("kubernetes", max_distance=1.5)
+
+    distances = [hit["distance"] for hit in hits]
+    assert distances == sorted(distances), "nearest must still come first"
