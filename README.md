@@ -174,6 +174,15 @@ suite is green on a fresh checkout.
 
 Prometheus and Grafana deploy with everything else.
 
+![Grafana dashboard with thirteen panels: agent health, corpus size, tool call rate and p95 latency by tool, error rate, calls by agent, orchestrator run outcomes and iterations, nudged runs, and search outcomes by category](docs/images/grafana-dashboard.png)
+
+A real capture of the running stack, not a mock-up — the dashboard is
+provisioned from a ConfigMap, so this is what comes up on a fresh deploy. The
+orchestrator panels are sparse because only a handful of runs went through the
+deployed service inside that window; the tool panels are busier because the
+evaluation harness had just run. `docs/RUNBOOK.md` has the one-line command that
+regenerates this image.
+
 Grafana is behind the ingress at `http://localhost:18080/grafana/` — no
 port-forward — with its datasource and dashboard already provisioned.
 Discovery is annotation-driven — a new component opts in with

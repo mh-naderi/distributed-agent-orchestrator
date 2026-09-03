@@ -121,6 +121,29 @@ closes, or the machine reboots. A rolling update silently breaks them: the
 local port keeps accepting TCP while the tunnel behind it is dead, so a plain
 port check reports "up" misleadingly.
 
+## Regenerating the dashboard screenshot
+
+The README image is a real capture, so it goes stale as the dashboard changes.
+With the cluster up and Grafana reachable through the ingress:
+
+```bash
+"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --hide-scrollbars --window-size=1600,1850 --virtual-time-budget=30000 --screenshot="D:\Projects\agent-orchestrator\docs\images\grafana-dashboard.png" "http://localhost:18080/grafana/d/agent-orchestrator/agent-orchestrator?kiosk&from=now-3h&to=now"
+```
+
+No credentials are needed because the manifest enables anonymous viewing, and
+`kiosk` drops Grafana's own navigation. The window must be tall enough to hold
+every panel: Grafana renders lazily, so a panel below the fold comes out blank
+rather than missing, which is easy to miss when checking the file.
+
+Drive a few runs through the deployed orchestrator first, or the three
+orchestrator panels will read "No data" - the evaluation harness runs the graph
+in-process and never touches the deployed service, and the pod's counters reset
+when it restarts:
+
+```bash
+curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18080/stream
+```
+
 ## Stopping everything
 
 ```bash
