@@ -465,6 +465,35 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## The measurements are code now
+
+Every strong claim in this document is a number: routing went 1 in 5 to 5 in 5
+when a tool description changed, fabrication went 8 in 8 to 0 in 8 when search
+results carried a coverage note, a floor of 0.90 produced 7 fabrications in 8
+where 0.70 produced none. Each of those came from a script that was written, run
+once and thrown away. The conclusions outlived the evidence for them, which is
+the same shape of problem this project keeps finding in its own agents - an
+assertion that reads as established because nothing is left to check it against.
+
+`eval/experiment.py` has the two shapes that kept recurring. `repeat` runs a case
+through the whole loop N times and reports the fabrication count *and the route
+taken*, because the route has twice been the finding: "6 runs in 8 never reached
+the web" was how the last fabrication path got narrowed down. `ab` holds the
+evidence fixed and varies one thing, which the whole loop cannot do - it reaches
+`search_web` about once in eight runs, so a change to search results would need
+thirty runs to yield a handful of samples.
+
+`eval/distance_study.py` is the third shape and runs inside the pod, since it
+needs the store's embedder and the MCP tool applies the floor under test. It
+prints the top hit for every query, because the labels are the one part no code
+can verify: a query filed under "the corpus cannot answer this" that the corpus
+actually covers would quietly corrupt the threshold chosen from it.
+
+It also carries the trap that caught this project out. The output now counts, for
+each candidate floor, how many *wrong-subject* documents it would admit - 0 out
+of 2 at 0.70, 2 out of 2 at 0.90 - so the next reader sees the reason 0.90 failed
+in the same table that makes 0.90 look attractive.
+
 ## Saying which results are not about what was asked
 
 With the corpus cleaned up and the empty-evidence guardrail in place, one

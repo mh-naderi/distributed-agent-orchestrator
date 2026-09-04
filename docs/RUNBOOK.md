@@ -121,6 +121,41 @@ closes, or the machine reboots. A rolling update silently breaks them: the
 local port keeps accepting TCP while the tunnel behind it is dead, so a plain
 port check reports "up" misleadingly.
 
+## Reproducing a measurement
+
+Claims in `docs/architecture.md` come with numbers. These are how the numbers
+were produced, so they can be checked rather than believed. All of them need the
+cluster up, the agents reachable and Ollama running.
+
+How often does something happen, through the whole loop:
+
+```bash
+OLLAMA_HOST=http://localhost:11434 .venv/Scripts/python.exe -m eval.experiment repeat --case honest-ignorance --runs 8
+```
+
+It reports which route the loop took as well as the count, and that matters: a
+change which stops the model calling `search_web` at all looks like a fabrication
+fix if only the totals are read.
+
+Did one change cause it - same evidence, one difference:
+
+```bash
+OLLAMA_HOST=http://localhost:11434 .venv/Scripts/python.exe -m eval.experiment ab --case honest-ignorance --tool search_web --strip "Note: none of these" --runs 8
+```
+
+The loop reaches `search_web` about once in eight runs, so measuring a change to
+search results through the whole loop would need thirty runs to collect a
+handful. `ab` fetches the evidence once and varies only the text after `--strip`.
+Live results differ between fetches, so a `--strip` that was present yesterday
+may not be today; the command says so rather than silently measuring nothing.
+
+What distances the relevance floor is separating - runs inside the pod, because
+it needs that agent's embedder and the MCP tool applies the floor being tested:
+
+```bash
+kubectl exec -i retrieval-agent-0 -- python - < eval/distance_study.py
+```
+
 ## Regenerating the dashboard screenshot
 
 The README image is a real capture, so it goes stale as the dashboard changes.
