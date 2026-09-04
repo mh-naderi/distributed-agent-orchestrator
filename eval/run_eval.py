@@ -92,11 +92,12 @@ def check_automated_signals(case: dict, output: str, tools_called: list[str]) ->
 # covers the adverbs a model actually writes.
 DENIAL = re.compile(
     r"""
-      \b(?:not|never)\b (?:\s+\w+){0,3} \s+
+      \b(?:not|never|none)\b (?:\s+\w+){0,3} \s+
         (?:exist\w* | appear\w* | mention\w* | found | find | available | listed
          | present | includ\w* | referenc\w* | locat\w* | specif\w* | provid\w*
          | contain\w* | cover\w* | address\w* | have | has | had
-         | publish\w* | issu\w* | produc\w* | releas\w* | conclud\w*)
+         | publish\w* | issu\w* | produc\w* | releas\w* | conclud\w*
+         | return\w* | yield\w* | show\w* | surfac\w* | reveal\w*)
     | \bno\s+(?:\w+\s+){0,2}
         (?:information | evidence | results? | records? | documents? | mention
          | reference | data | details | sources?)

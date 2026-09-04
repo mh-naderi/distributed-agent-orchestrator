@@ -465,6 +465,62 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## Saying which results are not about what was asked
+
+With the corpus cleaned up and the empty-evidence guardrail in place, one
+fabrication path was left, and measuring it showed how narrow it had become:
+over eight runs of `honest-ignorance`, six never reached the web at all -
+`retrieve` came back empty, the guardrail fired, the answer was honest. Two ran a
+search, and one of those two fabricated. All remaining invention lived there,
+where the search *succeeds* and returns real documents about something else.
+
+The signal is a fact the agent can compute. It knows the query and it knows what
+came back, so it can say which capitalised words from the query appear in none of
+the results:
+
+> Note: none of these results mention Quazzlemint. They were the closest matches,
+> not necessarily results about it.
+
+No model, no inference, nothing to hallucinate. Only capitalised words, and never
+the first - that one is capitalised because it starts a sentence. Proper nouns are
+where misattribution happens, and a note that fired on ordinary words would be
+noise, which is what a model learns to skip.
+
+### The measurement, and what it took to trust it
+
+The full loop now reaches `search_web` about once in eight runs, so measuring the
+note through it would need thirty runs for a handful of samples. Instead the step
+the note is meant to change was isolated: one real result set, the same question,
+the note as the only difference.
+
+| | fabricated |
+|---|---|
+| without the note | **8 of 8** |
+| with the note | **0 of 8** |
+
+Two honest qualifications. An earlier attempt at the same A/B produced 0 of 8
+both ways, because the live search had returned a different, less answerable-
+looking set of documents - so the note matters when the results invite an answer
+and is neutral when they do not. And the **LLM judge flagged none of the eight
+fabrications**: it scored them grounded, several at 5 out of 5, because every
+claim did trace back to the documents. Only `check_subject_grounding` caught
+them, which is the clearest vindication yet of building that signal.
+
+### The instrument was wrong before the result was right
+
+The first run of this A/B reported 2 of 8 without the note and 3 of 8 with it,
+which would have said the note made things slightly worse. Reading the flagged
+sentences rather than the counts showed three of them were honest denials:
+"None of the results mention the Quazzlemint Foundation" and "did not return any
+relevant information" were not matched, because the pattern knew `not` and
+`never` but not `none`, and its verb list had no `return`.
+
+That is the third time this lexical detector has been widened by observation, and
+the failure mode is worth stating plainly: a denial detector that miscounts does
+not merely miss things, it produces a number that still looks like a number.
+Both directions are now pinned in tests, so widening it cannot quietly let an
+invention through.
+
 ## One case that checks whether the answer is true
 
 Every signal in this harness asks whether an answer is *supported*. None asked

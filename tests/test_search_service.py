@@ -286,3 +286,86 @@ def test_an_asserted_label_is_marked_unverified(label):
 
     assert rendered == f"unverified label: {label}"
     assert not rendered.startswith("source:")
+
+
+# ---------------------------------------------------------------------------
+# Results that are not about what was asked
+# ---------------------------------------------------------------------------
+# The last fabrication path. The corpus fixes and the empty-evidence guardrail
+# both leave it untouched, because the search genuinely succeeds - it just
+# returns documents about something else, and the model answers from them.
+
+
+@pytest.mark.parametrize(
+    "query, results, expected",
+    [
+        (
+            "What did the Quazzlemint Foundation conclude in its 2019 report?",
+            "Annual Report 2019 - Mellon Foundation grants supported work",
+            ["Quazzlemint"],
+        ),
+        # Every capitalised word is present, so there is nothing to say.
+        (
+            "Who won the 2018 FIFA World Cup final?",
+            "The 2018 FIFA World Cup final: France beat Croatia.",
+            [],
+        ),
+        # The first word is capitalised by sentence position, not because it
+        # names anything - reporting it would be noise on every single query.
+        ("What is quantum tunnelling?", "Tunnelling is a quantum effect.", []),
+        # Lower-case queries name nothing in particular.
+        ("what is kubernetes", "Docker and containers", []),
+        # Case-insensitive matching: the result names it differently.
+        ("Tell me about Kubernetes", "kubernetes orchestrates containers", []),
+    ],
+)
+def test_only_unmatched_proper_nouns_are_reported(query, results, expected):
+    assert research_server.unmentioned_terms(query, results) == expected
+
+
+def test_a_term_is_reported_once_however_often_it_is_asked(service, fake_search):
+    assert research_server.unmentioned_terms("Zorbulon and Zorbulon", "nothing") == [
+        "Zorbulon"
+    ]
+
+
+def test_the_note_is_appended_to_real_results(service, fake_search):
+    """
+    Appended, not substituted. The results are real and worth having; what is
+    added is the fact that they do not mention what was asked about.
+    """
+    fake_search.script = [
+        [{"title": "Mellon 2019", "body": "grants", "href": "https://example.org/m"}]
+    ]
+
+    outcome = service.run("What did the Quazzlemint Foundation conclude?")
+
+    assert "Mellon 2019" in outcome.text, "the results must still be there"
+    assert "none of these results mention Quazzlemint" in outcome.text
+    assert outcome.indexable is True
+
+
+def test_no_note_when_the_results_are_about_the_subject(service, fake_search):
+    """
+    A note on every search would be noise, and noise is what a model learns to
+    skip. It has to mean something when it appears.
+    """
+    fake_search.script = [
+        [{"title": "Kubernetes", "body": "orchestration", "href": "https://example.org/k"}]
+    ]
+
+    outcome = service.run("Tell me about Kubernetes")
+
+    assert "Note:" not in outcome.text
+
+
+def test_the_note_is_counted_separately(service, fake_search):
+    """Worth a metric: a rising line here means searches are drifting off-subject."""
+    fake_search.script = [
+        [{"title": "Mellon", "body": "grants", "href": "https://example.org/m"}]
+    ]
+    before = outcomes("results_missing_terms")
+
+    service.run("What did the Quazzlemint Foundation conclude?")
+
+    assert outcomes("results_missing_terms") == before + 1

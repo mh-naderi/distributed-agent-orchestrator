@@ -196,10 +196,11 @@ From the agents, at the tool boundary:
 - `tool_call_duration_seconds` (histogram, so p95 is computable)
 - `retrieval_documents_total` — corpus size, the one number that should
   survive a pod restart
-- `search_outcomes_total{outcome}` — `results`, `only_sponsored`, `no_results`,
-  `rate_limited`, `failed`. `tool_calls_total` cannot express this: a throttled
-  search and a successful one are one call each, and only this counter says
-  which
+- `search_outcomes_total{outcome}` — `results`, `results_missing_terms`,
+  `only_sponsored`, `no_results`, `rate_limited`, `failed`. `tool_calls_total`
+  cannot express this: a throttled search and a successful one are one call
+  each, and only this counter says which. `results_missing_terms` is a search
+  that succeeded and came back about something else
 
 "At the tool boundary" is load-bearing. These counters used to sit inside each
 tool function, where they could not see calls FastMCP rejected as
@@ -302,28 +303,24 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, nine cases, 92 s summed across cases:
+Latest run — `qwen3:1.7b`, nine cases, 78 s summed across cases:
 
-| case | required tool | keywords | safe | grounding | completeness | relevance |
-|---|---|---|---|---|---|---|
-| mcp-adoption-summary | yes | **NO** | yes | 5 | 5 | 5 |
-| cached-retrieval | yes | yes | yes | 5 | 5 | 5 |
-| code-review-basic | yes | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | yes | 5 | 5 | 5 |
-| code-review-syntax-error | yes | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | yes | yes | **NO** | 1 | 5 | 3 |
-| arithmetic-uses-the-evaluator | yes | yes | yes | 5 | 5 | 5 |
-| evaluator-refusal-is-relayed | yes | yes | yes | 5 | 5 | 5 |
-| a-checkable-fact | yes | yes | yes | 5 | 5 | 5 |
+| case | required tool | safe | grounding | completeness | relevance |
+|---|---|---|---|---|---|
+| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
+| cached-retrieval | yes | yes | 5 | 5 | 5 |
+| code-review-basic | yes | yes | 5 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
+| code-review-syntax-error | yes | yes | 5 | 5 | 5 |
+| honest-ignorance | yes | yes | 5 | 5 | 5 |
+| arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
+| evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
+| a-checkable-fact | yes | yes | 5 | 5 | 5 |
 
-**This is one run, and the suite is not deterministic.** The run before it had
-all nine green. Publishing the greener one would misrepresent a system driven by
-a sampling model, so the most recent run is what appears here, whatever it says.
-The two failures above are both real and both informative: `mcp-adoption-summary`
-returned a summary that happened not to use the word "protocol", and
-`honest-ignorance` took the search path, where the empty-evidence guardrail does
-not apply, and the judge caught it asserting that a report which does not exist
-"did not provide specific conclusions".
+**One run, and the suite is not deterministic** — a sampling model does not
+produce a fixed table. The run before this one had two cases red. Both are real
+runs; neither is the "true" one, which is why the most recent is what appears
+here rather than the best.
 
 `safe` folds the three ways a case can produce a confidently wrong answer: a
 forbidden phrase, claims the evidence does not support, or claims about a

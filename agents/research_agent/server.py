@@ -18,6 +18,7 @@ Pattern used throughout this project:
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 
@@ -52,7 +53,9 @@ RESULTS_INDEXED = Counter(
 SEARCH_OUTCOMES = Counter(
     "search_outcomes_total",
     "Web searches by outcome",
-    ["outcome"],  # results | only_sponsored | no_results | rate_limited | failed
+    # results | results_missing_terms | only_sponsored | no_results
+    # | rate_limited | failed
+    ["outcome"],
 )
 
 # Prometheus scrapes this port for metrics (separate from the MCP protocol
@@ -135,6 +138,43 @@ AD_URL_MARKERS = (
     "doubleclick.net",
     "/aclk?",
 )
+
+
+# Words the caller capitalised are the ones a search can silently fail to be
+# about. "What did the Quazzlemint Foundation conclude in its 2019 report" gets
+# real annual reports from real foundations, none of them Quazzlemint's, and the
+# model has answered from those - the last fabrication path left after the corpus
+# was cleaned up and the empty-evidence guardrail was added.
+#
+# Restricted to capitalised words, and never the first, which is capitalised only
+# because it starts the sentence. Proper nouns are where misattribution happens,
+# and a note that fires on ordinary words would be noise the model learns to skip.
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'-]*")
+
+
+def unmentioned_terms(query: str, results: str) -> list[str]:
+    """
+    Which capitalised words from the query appear in none of the results?
+
+    A fact, not a judgement. The agent knows what was asked and what came back,
+    and comparing them needs no model and cannot hallucinate. What the model does
+    with it is the model's business; what this avoids is presenting results as
+    though they were about the thing that was asked for.
+    """
+    words = _WORD.findall(query)
+    haystack = results.lower()
+
+    missing, seen = [], set()
+    for word in words[1:]:  # the first word is capitalised by sentence position
+        if not word[0].isupper() or len(word) < 3:
+            continue
+        lowered = word.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        if lowered not in haystack:
+            missing.append(word)
+    return missing
 
 
 def _is_advertisement(url: str) -> bool:
@@ -269,12 +309,24 @@ class SearchService:
         # stores one document per result rather than one blob.
         # The URL is included so indexed documents carry their provenance and a
         # reader of the final answer can check it.
-        return SearchOutcome(
-            text="\n\n".join(
-                f"{r['title']}\n{r['body']}\nSource: {r['href']}" for r in organic
-            ),
-            indexable=True,
+        body = "\n\n".join(
+            f"{r['title']}\n{r['body']}\nSource: {r['href']}" for r in organic
         )
+
+        missing = unmentioned_terms(query, body)
+        if missing:
+            SEARCH_OUTCOMES.labels(outcome="results_missing_terms").inc()
+            # Appended after the results, not before: it is a note about them,
+            # and putting it first would read as a refusal to show them.
+            body += (
+                "\n\nNote: none of these results mention "
+                + ", ".join(missing)
+                + ". They were the closest matches, not necessarily results about "
+                "it. Do not describe them as though they were, and say so if that "
+                "is all there is."
+            )
+
+        return SearchOutcome(text=body, indexable=True)
 
     def _failure(self, query: str, exc: DDGSException) -> SearchOutcome:
         """

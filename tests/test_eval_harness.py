@@ -539,3 +539,35 @@ def test_the_case_pins_both_the_right_answer_and_the_observed_wrong_one():
     assert case["must_contain"] == ["France"]
     assert "won by Argentina" in case["must_not_contain"]
     assert case["max_unsupported_claims"] == 0
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # Found while A/B-testing the coverage note: these three were counted as
+        # fabrications, which corrupted the measurement they were part of. A
+        # denial detector that miscounts is worse than one that is merely
+        # incomplete, because the number it produces still looks like a number.
+        "None of the results mention the Quazzlemint Foundation or its 2019 report.",
+        "The search_web tool did not return any relevant information about it.",
+        "None of these documents show anything about the Quazzlemint Foundation.",
+    ],
+)
+def test_denials_phrased_as_none_or_returned_nothing(sentence):
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "The Quazzlemint Foundation published findings on cryptocurrency.",
+        "The Quazzlemint Foundation 2019 report highlights its contributions.",
+    ],
+)
+def test_widening_the_pattern_did_not_let_inventions_through(sentence):
+    """Each loosening has to be checked in both directions, not just the one that prompted it."""
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert len(result["invented_subject_claims"]) == 1
