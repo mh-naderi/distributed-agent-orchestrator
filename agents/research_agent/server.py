@@ -18,12 +18,12 @@ Pattern used throughout this project:
 
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException, TimeoutException
+from coverage import unmentioned_terms
 from indexer import index_results
 from instrumentation import InstrumentedMCP
 from prometheus_client import Counter, start_http_server
@@ -140,43 +140,6 @@ AD_URL_MARKERS = (
 )
 
 
-# Words the caller capitalised are the ones a search can silently fail to be
-# about. "What did the Quazzlemint Foundation conclude in its 2019 report" gets
-# real annual reports from real foundations, none of them Quazzlemint's, and the
-# model has answered from those - the last fabrication path left after the corpus
-# was cleaned up and the empty-evidence guardrail was added.
-#
-# Restricted to capitalised words, and never the first, which is capitalised only
-# because it starts the sentence. Proper nouns are where misattribution happens,
-# and a note that fires on ordinary words would be noise the model learns to skip.
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'-]*")
-
-
-def unmentioned_terms(query: str, results: str) -> list[str]:
-    """
-    Which capitalised words from the query appear in none of the results?
-
-    A fact, not a judgement. The agent knows what was asked and what came back,
-    and comparing them needs no model and cannot hallucinate. What the model does
-    with it is the model's business; what this avoids is presenting results as
-    though they were about the thing that was asked for.
-    """
-    words = _WORD.findall(query)
-    haystack = results.lower()
-
-    missing, seen = [], set()
-    for word in words[1:]:  # the first word is capitalised by sentence position
-        if not word[0].isupper() or len(word) < 3:
-            continue
-        lowered = word.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        if lowered not in haystack:
-            missing.append(word)
-    return missing
-
-
 def _is_advertisement(url: str) -> bool:
     return any(marker in url.lower() for marker in AD_URL_MARKERS)
 
@@ -233,6 +196,16 @@ class SearchOutcome:
 
     text: str
     indexable: bool
+    # What goes to the corpus, when that differs from what the model is shown.
+    # The coverage note is commentary about the results, not a document: it was
+    # briefly indexed along with them, and because it repeats the words of the
+    # query it then came back as the NEAREST match to that query - a note about
+    # finding nothing, stored as evidence, ranking first. Defaults to `text` so
+    # every other outcome is unaffected.
+    storable: str | None = None
+
+    def to_store(self) -> str:
+        return self.text if self.storable is None else self.storable
 
 
 class SearchService:
@@ -313,6 +286,7 @@ class SearchService:
             f"{r['title']}\n{r['body']}\nSource: {r['href']}" for r in organic
         )
 
+        results_only = body
         missing = unmentioned_terms(query, body)
         if missing:
             SEARCH_OUTCOMES.labels(outcome="results_missing_terms").inc()
@@ -326,7 +300,7 @@ class SearchService:
                 "is all there is."
             )
 
-        return SearchOutcome(text=body, indexable=True)
+        return SearchOutcome(text=body, indexable=True, storable=results_only)
 
     def _failure(self, query: str, exc: DDGSException) -> SearchOutcome:
         """
@@ -398,7 +372,7 @@ def search_web(query: str) -> str:
     # retrieve returned them as evidence. Each result carries its own "Source:"
     # line, and the retrieval agent prefers that - see provenance_of in store.py.
     if outcome.indexable:
-        stored = index_results(outcome.text, source="web-search")
+        stored = index_results(outcome.to_store(), source="web-search")
         RESULTS_INDEXED.labels(status="stored" if stored else "skipped").inc()
     else:
         RESULTS_INDEXED.labels(status="not_indexable").inc()

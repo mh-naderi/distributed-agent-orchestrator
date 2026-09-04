@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py instrumentation.py store.py .
+COPY server.py instrumentation.py coverage.py store.py .
 
 # The index lives here. In Kubernetes a PersistentVolume is mounted at this path,
 # which is what lets the corpus survive a pod restart - unlike the stateless

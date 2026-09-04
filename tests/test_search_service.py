@@ -369,3 +369,42 @@ def test_the_note_is_counted_separately(service, fake_search):
     service.run("What did the Quazzlemint Foundation conclude?")
 
     assert outcomes("results_missing_terms") == before + 1
+
+
+def test_both_agents_carry_an_identical_coverage_module():
+    """
+    Duplicated rather than shared, the same trade as instrumentation.py: each
+    image builds from its own directory. Duplication is only acceptable if drift
+    is caught.
+    """
+    copies = sorted((Path(__file__).resolve().parents[1] / "agents").glob("*/coverage.py"))
+
+    assert len(copies) == 2, [str(c) for c in copies]
+    assert copies[0].read_bytes() == copies[1].read_bytes(), (
+        f"{copies[1]} has drifted from {copies[0]} - copy it across rather than editing one"
+    )
+
+
+def test_the_coverage_note_is_shown_but_not_stored(service, fake_search):
+    """
+    The note is commentary about the results, not a document. It was briefly
+    indexed along with them, and because it repeats the words of the query it
+    came back as the NEAREST match to that same query - a note about finding
+    nothing, stored as evidence, ranking first. It corrupted a threshold study
+    before it was noticed.
+    """
+    fake_search.script = [
+        [{"title": "Mellon 2019", "body": "grants", "href": "https://example.org/m"}]
+    ]
+
+    outcome = service.run("What did the Quazzlemint Foundation conclude?")
+
+    assert "none of these results mention" in outcome.text, "the model must see it"
+    assert "none of these results mention" not in outcome.to_store(), "the corpus must not"
+    assert "Mellon 2019" in outcome.to_store(), "the results themselves are still stored"
+
+
+def test_an_outcome_without_a_note_stores_what_it_shows(service, fake_search):
+    outcome = service.run("q")
+
+    assert outcome.to_store() == outcome.text

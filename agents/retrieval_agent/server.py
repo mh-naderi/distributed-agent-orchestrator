@@ -24,6 +24,7 @@ import ollama
 from instrumentation import InstrumentedMCP
 from prometheus_client import Gauge, start_http_server
 
+from coverage import unmentioned_terms
 from store import VectorStore, chunk, is_derived
 
 
@@ -40,21 +41,38 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 
 # How far a neighbour may be and still count as a match.
 #
-# MEASURED, not chosen. Against a 130-document corpus with nomic-embed-text,
-# best-hit L2 distances came out as:
+# MEASURED over twenty queries against the live corpus, twelve it can answer and
+# eight it cannot:
 #
-#   queries the corpus really answers   0.568 - 0.641
-#   a question about an absent entity   0.768
-#   queries unrelated to anything here  1.025 - 1.078
+#   answerable                     0.491 - 0.698
+#   unrelated to anything stored   0.997 - 1.048
 #
-# 0.70 is the midpoint of the gap between the first two, so it has roughly equal
-# room on either side. The cutoff is not a law - it is five genuine queries
-# against one corpus and one embedding model, which is why it is an environment
-# variable rather than a constant.
+# On that evidence alone 0.90 looks obviously better than 0.70: it sits in the
+# middle of an enormous gap, and it keeps an awkward phrasing of a question the
+# corpus really can answer - "What did the Mellon Foundation conclude?" scores
+# 0.877 and was rejected outright at 0.70.
 #
-# Erring toward rejection is deliberate. A wrongly rejected match sends the model
-# to search_web, which is recoverable; a wrongly accepted one becomes a confident
-# answer about something the corpus never contained, which is not.
+# It was tried, and it was much worse. Fabrication on honest-ignorance went to
+# 7 runs in 8, against 0 to 1 at 0.70. The reason is what the floor is really
+# doing, which is not what the distance study suggests:
+#
+#   0.764  "What did the Quazzlemint Foundation conclude in its 2019 report?"
+#          -> a real annual report, belonging to somebody else
+#   0.877  "What did the Mellon Foundation conclude?"
+#          -> a real annual report, belonging to exactly who was asked about
+#
+# The document about the WRONG subject is nearer than the one about the right
+# subject, so no threshold separates them. 0.70 does not succeed by telling them
+# apart - it succeeds by excluding BOTH, which leaves the model with nothing and
+# lets the empty-evidence guardrail produce an honest answer. Raising it hands
+# the model plausible documents about the wrong thing, and the coverage note
+# alongside them did not stop it using them.
+#
+# So the floor is kept tight deliberately, and the cost is named rather than
+# hidden: a well-posed question the corpus can answer is sometimes refused, and
+# the model is sent to the web instead. That is recoverable. The alternative,
+# measured, is seven confident answers in eight about a foundation that does not
+# exist.
 MAX_MATCH_DISTANCE = float(os.environ.get("RETRIEVAL_MAX_DISTANCE", "0.70"))
 
 # A tool says so when it has nothing to offer, rather than leaving the caller to
@@ -191,11 +209,26 @@ def retrieve(query: str, k: int = 5) -> str:
             "it. Do not answer from your own knowledge."
         )
 
-    return "\n\n".join(
+    body = "\n\n".join(
         f"[{i + 1}] ({_attribution(hit['source'])}, distance: {hit['distance']:.3f})"
         f"\n{hit['text']}"
         for i, hit in enumerate(hits)
     )
+
+    # Distance said these are the closest documents. It did not say they are
+    # about what was asked, and with the floor now set for gross irrelevance
+    # rather than near-misses, saying so is the check that carries the weight.
+    missing = unmentioned_terms(query, body)
+    if missing:
+        body += (
+            "\n\nNote: none of these documents mention "
+            + ", ".join(missing)
+            + ". They were the closest matches in the corpus, not necessarily "
+            "documents about it. Do not describe them as though they were, and "
+            "say so if that is all there is."
+        )
+
+    return body
 
 
 if __name__ == "__main__":
