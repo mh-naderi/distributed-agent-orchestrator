@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -237,6 +238,117 @@ def _sse(event: str, **payload) -> dict:
     return {"event": event, "data": json.dumps(payload)}
 
 
+# ---------------------------------------------------------------------------
+# Turning graph steps into events
+# ---------------------------------------------------------------------------
+# One handler per node, rather than a chain of branches inside the streaming
+# loop. Two pieces of state travel between them - the answer being held back and
+# the outcome the run will be counted as - and while they were closure variables
+# mutated between yields, the only way to check "does a nudge drop the held
+# answer" was to drive the whole endpoint and read the event stream. They are a
+# small object now, so each handler can be called on its own.
+#
+# Each handler yields the events for its node, in order, and may adjust the run
+# state. Ordering is the contract: the page renders events as they arrive.
+
+
+@dataclass
+class RunState:
+    """What the streaming loop carries between nodes."""
+
+    # Held rather than emitted. The router has not run yet when `reason`
+    # produces content, so this may still turn out to be a narrated tool call
+    # the loop is about to nudge - emitting it now would show the page a wrong
+    # answer, then a nudge, then the real one. Flushed once the run is over.
+    pending_answer: str | None = None
+
+    # Pessimistic default: anything that escapes without setting this - an
+    # exception, or the client disconnecting mid-run and closing the generator -
+    # is counted as a failure rather than silently not counted.
+    outcome: str = "failed"
+
+    iterations: int | None = None
+
+
+def _on_reason(run: RunState, update: dict, messages: list[dict]):
+    message = messages[-1] if messages else {}
+    if message.get("tool_calls"):
+        for call in message["tool_calls"]:
+            yield _sse(
+                "tool_call",
+                iteration=update.get("iterations"),
+                name=call["name"],
+                arguments=call["arguments"],
+            )
+    else:
+        run.pending_answer = message.get("content", "")
+
+
+def _on_nudge(run: RunState, update: dict, messages: list[dict]):
+    # Surfaced rather than done silently. The page would otherwise show an
+    # unexplained pause and a second round of thinking, and "the system did
+    # something you cannot see" is the habit this project keeps having to break.
+    # The held answer was the narration. Drop it.
+    run.pending_answer = None
+    NUDGES.inc()
+    yield _sse(
+        "nudge",
+        message="the model described a tool call without making one - asking it again",
+    )
+
+
+def _on_reground(run: RunState, update: dict, messages: list[dict]):
+    # Same reasoning as the nudge: shown, not silent. The held answer was built
+    # on tools that all reported nothing, so it must not reach the page - that
+    # answer is the failure this node exists for.
+    run.pending_answer = None
+    REGROUNDS.inc()
+    yield _sse(
+        "reground",
+        message=(
+            "every tool reported it found nothing, and the model answered "
+            "anyway - asking it again"
+        ),
+    )
+
+
+def _on_unanswered(run: RunState, update: dict, messages: list[dict]):
+    # Not an answer, so not an answer event. The held narration must not be
+    # flushed afterwards.
+    run.pending_answer = None
+    run.outcome = "unanswered"
+    message = messages[-1] if messages else {}
+    yield _sse("unanswered", content=message.get("content", ""))
+
+
+def _on_truncate(run: RunState, update: dict, messages: list[dict]):
+    # A separate event, not an answer. The run ended because the guardrail
+    # fired, and calling that an "answer" would present a stop notice as a
+    # result.
+    run.outcome = "truncated"
+    message = messages[-1] if messages else {}
+    yield _sse("truncated", content=message.get("content", ""))
+
+
+def _on_act(run: RunState, update: dict, messages: list[dict]):
+    for message in messages:
+        yield _sse(
+            "tool_result",
+            name=message.get("name", "?"),
+            output=message.get("content", ""),
+        )
+
+
+NODE_HANDLERS = {
+    "reason": _on_reason,
+    "nudge": _on_nudge,
+    "reground": _on_reground,
+    "unanswered": _on_unanswered,
+    "truncate": _on_truncate,
+    "act": _on_act,
+}
+
+
 async def _run(task: str, escalate: bool = False, session_id: str | None = None):
     """
     Drive the graph and translate each step into an event.
@@ -247,23 +359,19 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
     watching - no streaming concerns leak into the loop.
     """
     started = time.perf_counter()
-    # Pessimistic default: anything that escapes without setting this - an
-    # exception, or the client disconnecting mid-run and closing the
-    # generator - is counted as a failure rather than silently not counted.
-    outcome = "failed"
-    iterations = None
+    run = RunState()
 
     try:
         try:
             registry = await _registry_cache.get()
         except Exception as exc:
             DISCOVERY_FAILURES.inc()
-            outcome = "no_tools"
+            run.outcome = "no_tools"
             yield _sse("run_error", message=f"tool discovery failed: {exc}")
             return
 
         if not registry.tools:
-            outcome = "no_tools"
+            run.outcome = "no_tools"
             yield _sse(
                 "run_error",
                 message="No MCP tools discovered - are the agent servers running?",
@@ -276,7 +384,7 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
         # goes here, immediately before inference starts.
         if _run_limiter.would_wait():
             if _run_limiter.is_full():
-                outcome = "rejected"
+                run.outcome = "rejected"
                 yield _sse(
                     "busy",
                     message=(
@@ -311,96 +419,25 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                 # in order reconstructs the final history without a second
                 # pass over the graph.
                 final_history = list(history)
-                pending_answer = None
                 async for chunk in build_graph(registry, get_provider(escalate)).astream(state):
                     for node, update in chunk.items():
                         messages = update.get("messages") or []
                         final_history.extend(messages)
                         if update.get("iterations") is not None:
-                            iterations = update["iterations"]
+                            run.iterations = update["iterations"]
 
-                        if node == "reason":
-                            message = messages[-1] if messages else {}
-                            if message.get("tool_calls"):
-                                for call in message["tool_calls"]:
-                                    yield _sse(
-                                        "tool_call",
-                                        iteration=update.get("iterations"),
-                                        name=call["name"],
-                                        arguments=call["arguments"],
-                                    )
-                            else:
-                                # HELD, not emitted. The router has not run yet,
-                                # so this may still turn out to be a narrated
-                                # tool call that the loop is about to nudge -
-                                # and emitting it now would show the page a
-                                # wrong answer, then a nudge, then the real one.
-                                # Flushed below once the run is genuinely over.
-                                pending_answer = message.get("content", "")
-
-                        elif node == "nudge":
-                            # Surfaced rather than done silently. The page
-                            # would otherwise show an unexplained pause and a
-                            # second round of thinking, and "the system did
-                            # something you cannot see" is the habit this
-                            # project keeps having to break.
-                            # The held answer was the narration. Drop it.
-                            pending_answer = None
-                            NUDGES.inc()
-                            yield _sse(
-                                "nudge",
-                                message=(
-                                    "the model described a tool call without making "
-                                    "one - asking it again"
-                                ),
-                            )
-
-                        elif node == "reground":
-                            # Same reasoning as the nudge: shown, not silent.
-                            # The held answer was built on tools that all
-                            # reported nothing, so it must not reach the page -
-                            # that answer is the failure this node exists for.
-                            pending_answer = None
-                            REGROUNDS.inc()
-                            yield _sse(
-                                "reground",
-                                message=(
-                                    "every tool reported it found nothing, and the "
-                                    "model answered anyway - asking it again"
-                                ),
-                            )
-
-                        elif node == "unanswered":
-                            # Not an answer, so not an answer event. The held
-                            # narration must not be flushed below.
-                            pending_answer = None
-                            outcome = "unanswered"
-                            message = messages[-1] if messages else {}
-                            yield _sse("unanswered", content=message.get("content", ""))
-
-                        elif node == "truncate":
-                            # A separate event, not an answer. The run ended
-                            # because the guardrail fired, and calling that an
-                            # "answer" would present a stop notice as a result.
-                            outcome = "truncated"
-                            message = messages[-1] if messages else {}
-                            yield _sse("truncated", content=message.get("content", ""))
-
-                        elif node == "act":
-                            for message in messages:
-                                yield _sse(
-                                    "tool_result",
-                                    name=message.get("name", "?"),
-                                    output=message.get("content", ""),
-                                )
+                        handler = NODE_HANDLERS.get(node)
+                        if handler:
+                            for event in handler(run, update, messages):
+                                yield event
             except Exception as exc:
                 logger.exception("run failed")
                 yield _sse("run_error", message=f"{type(exc).__name__}: {exc}")
                 return
 
-            if pending_answer is not None:
-                outcome = "answered"
-                yield _sse("answer", content=pending_answer)
+            if run.pending_answer is not None:
+                run.outcome = "answered"
+                yield _sse("answer", content=run.pending_answer)
 
             if session_id:
                 _sessions.save(session_id, final_history)
@@ -414,10 +451,10 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
     finally:
         # A generator's finally runs on close too, so a client that navigates
         # away mid-run is still counted rather than vanishing from the totals.
-        RUNS.labels(outcome=outcome).inc()
+        RUNS.labels(outcome=run.outcome).inc()
         RUN_DURATION.observe(time.perf_counter() - started)
-        if iterations is not None:
-            RUN_ITERATIONS.observe(iterations)
+        if run.iterations is not None:
+            RUN_ITERATIONS.observe(run.iterations)
 
 
 async def stream(request):
