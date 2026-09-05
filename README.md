@@ -309,24 +309,32 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, nine cases, 78 s summed across cases:
+Latest run — `qwen3:1.7b`, nine cases, 49 s summed across cases:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
 | mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
 | cached-retrieval | yes | yes | 5 | 5 | 5 |
 | code-review-basic | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 3 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
-| honest-ignorance | yes | yes | 5 | 5 | 5 |
+| honest-ignorance | **NO** | yes | 1 | 5 | 5 |
 | arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
 | evaluator-refusal-is-relayed | yes | yes | 5 | 5 | 5 |
 | a-checkable-fact | yes | yes | 5 | 5 | 5 |
 
 **One run, and the suite is not deterministic** — a sampling model does not
-produce a fixed table. The run before this one had two cases red. Both are real
-runs; neither is the "true" one, which is why the most recent is what appears
-here rather than the best.
+produce a fixed table, so the most recent run appears here whatever it says.
+Eight repeats of `honest-ignorance` immediately before this one called
+`retrieve` every time and answered honestly, 0 fabrications in 8; in the run
+above it called nothing at all and failed its required-tool check. Both are the
+same system on the same day. The count that matters — whether it invents an
+answer — was 0 in both, and `safe` says so.
+
+That volatility is why the required-tool assertion is the weakest signal in the
+harness and the fabrication count is the strongest. `python -m eval.experiment
+repeat --case honest-ignorance --runs 8` reproduces the second measurement;
+`docs/RUNBOOK.md` has the rest.
 
 `safe` folds the three ways a case can produce a confidently wrong answer: a
 forbidden phrase, claims the evidence does not support, or claims about a
