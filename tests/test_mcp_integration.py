@@ -71,7 +71,11 @@ async def test_index_then_retrieve_round_trip(registry):
 
     found = await registry.call("retrieve", {"query": marker, "k": 3})
     assert marker in found
-    assert "integration-test" in found
+    # "integration-test" is what this test CLAIMED it was indexing, and the
+    # corpus no longer repeats a caller's word back as though it were where the
+    # document came from. This text names no origin, so it has none.
+    assert "no stated origin" in found
+    assert "integration-test" not in found
 
 
 async def test_retrieve_says_so_when_nothing_matches(registry):

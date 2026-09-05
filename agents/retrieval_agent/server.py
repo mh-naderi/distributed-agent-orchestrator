@@ -25,7 +25,7 @@ from instrumentation import InstrumentedMCP
 from prometheus_client import Gauge, start_http_server
 
 from coverage import unmentioned_terms
-from store import VectorStore, chunk, is_derived
+from store import UNATTRIBUTED, VectorStore, chunk, is_derived
 
 
 # A stateless agent's metrics are all about flow - how many calls, how fast. A
@@ -168,6 +168,8 @@ def _attribution(source: str) -> str:
     """
     if is_derived(source):
         return f"source: {source}"
+    if source == UNATTRIBUTED:
+        return "no stated origin"
     # Terse on purpose. A longer hedge was measured and changed nothing about
     # the answers, so it was only spending context on a small model.
     return f"unverified label: {source}"

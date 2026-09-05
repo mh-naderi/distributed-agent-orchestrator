@@ -124,6 +124,39 @@ closes, or the machine reboots. A rolling update silently breaks them: the
 local port keeps accepting TCP while the tunnel behind it is dead, so a plain
 port check reports "up" misleadingly.
 
+## Auditing what the corpus says about itself
+
+A document's `source` is either a URL it names in its own text or
+`unattributed`. What the indexing caller claimed is kept separately, so the two
+questions - where did this come from, and what did somebody think they were
+indexing - stay apart:
+
+```bash
+kubectl exec retrieval-agent-0 -- python -c "
+import sqlite3, os
+con = sqlite3.connect(os.environ.get('RETRIEVAL_DB_PATH','/data/retrieval.db'))
+for row in con.execute('select claimed_source, count(*) from documents group by 1 order by 2 desc limit 10'):
+    print(row)"
+```
+
+After restoring a corpus from a backup that predates the split, move the old
+labels across. It deletes nothing and is idempotent:
+
+```bash
+kubectl exec -i retrieval-agent-0 -- python - < agents/retrieval_agent/backfill_claims.py
+kubectl exec -i retrieval-agent-0 -- python - < agents/retrieval_agent/backfill_claims.py apply
+```
+
+Back the volume up first - `VACUUM INTO` works while the agent is running:
+
+```bash
+kubectl exec retrieval-agent-0 -- python -c "
+import sqlite3, os, sqlite_vec, datetime
+db = os.environ.get('RETRIEVAL_DB_PATH','/data/retrieval.db')
+con = sqlite3.connect(db); con.enable_load_extension(True); sqlite_vec.load(con)
+con.execute('VACUUM INTO ?', (f'{db}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}',))"
+```
+
 ## Following one run across the services
 
 Every run gets an eight-character id, logged by the orchestrator and by every

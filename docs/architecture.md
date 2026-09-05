@@ -911,7 +911,44 @@ For the same reason `index_documents` no longer echoes the caller's label back i
 its confirmation. Reporting "indexed from X" when X was discarded would tell the
 model its label stuck.
 
-### The fallback still let a question become provenance
+### A claim is not a source
+
+Preferring a document's own `Source:` line fixed documents that have one. Text
+that does not - fragments the model composes and hands to `index_documents` -
+fell back to the caller's label, and the model is one of the callers. Counting
+the corpus found the habit in several shapes:
+
+| documents | label the model supplied |
+|---|---|
+| 34 | `Quazzlemint Foundation 2019 report` |
+| 10 | `FIFA World Cup` |
+| 7 | `web` |
+| 4 | `LinkedIn Learning: Project Management Foundations Exam - Quizlet` |
+| 3 | `www.umfoundation.com` |
+
+A query, a subject, a bare word, a page title, a domain. No rule separates those
+from an honest tag like `integration-test`, because the difference is not in the
+string - it is in whether the caller had any way to know, and a tool cannot ask.
+
+So the caller's word is no longer treated as provenance at all. A document that
+names its own origin keeps it; everything else is stored as `unattributed`, and
+`retrieve` says "no stated origin" rather than repeating a label nobody can
+vouch for. The claim itself is kept in a separate `claimed_source` column,
+because counting labels is exactly how this contamination was found, and a fix
+that removed that ability would have cost more than it bought.
+
+The honest tags lose their place in the source column too, which is the right
+outcome rather than a regrettable side effect: `integration-test` is also a
+claim by somebody who had no way to know what the text was. It is simply a claim
+that happened to be true.
+
+`backfill_claims.py` moves existing rows over. It deletes nothing - a document
+with real text is worth keeping whatever was written on the front of it - and it
+is idempotent, so it can be re-run whenever a corpus is restored from a backup
+that predates the change. 160 of 351 documents were carrying a claim as their
+source; none are now.
+
+### The fallback that let a question become provenance
 
 Preferring a document's own `Source:` line fixes documents that have one. Text
 that does not - fragments the model composes itself and hands to

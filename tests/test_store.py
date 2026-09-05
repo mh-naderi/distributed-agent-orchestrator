@@ -9,7 +9,12 @@ the quality of a particular embedding model.
 
 import pytest
 
-from agents.retrieval_agent.store import EMBEDDING_DIM, VectorStore, chunk
+from agents.retrieval_agent.store import (
+    EMBEDDING_DIM,
+    UNATTRIBUTED,
+    VectorStore,
+    chunk,
+)
 
 # Keywords mapped to distinct axes in the vector space, so "nearest" is
 # predictable and the assertions below mean something.
@@ -47,7 +52,10 @@ def test_index_then_retrieve_finds_the_matching_document(store):
 
     assert len(hits) == 1
     assert "Kubernetes" in hits[0]["text"]
-    assert hits[0]["source"] == "unit-test"
+    # None of these name an origin, so none of them get one. "unit-test" is
+    # what the caller CLAIMED, which is kept separately.
+    assert hits[0]["source"] == UNATTRIBUTED
+    assert store.claims("unit-test") == 3, "the claim is kept, just not as provenance"
 
 
 def test_results_are_ordered_nearest_first(store):
@@ -293,10 +301,16 @@ def test_a_document_that_names_its_origin_keeps_it(store):
     assert hit["source"] == "https://example.org/a.pdf"
 
 
-def test_the_callers_label_is_only_a_fallback(store):
+def test_a_callers_label_is_not_a_source(store):
+    """
+    This used to assert the opposite - that "eval-fixture" became the document's
+    source - and that was the defect. An honest tag and a fabricated one are the
+    same kind of thing: a claim by somebody who had no way to know. The corpus
+    records the claim without presenting it as provenance.
+    """
     store.index(["kubernetes runs containers"], "eval-fixture")
 
-    assert store.retrieve("kubernetes")[0]["source"] == "eval-fixture"
+    assert store.retrieve("kubernetes")[0]["source"] == UNATTRIBUTED
 
 
 def test_each_document_in_a_batch_gets_its_own_origin(store):
@@ -386,12 +400,62 @@ def test_everything_else_is_an_assertion(label):
     assert not is_derived(label)
 
 
-def test_a_document_with_no_origin_keeps_the_callers_label(store):
+def test_a_claim_is_kept_but_kept_as_a_claim(store):
     """
-    The label is still stored. Discarding it would lose the audit trail that
-    found the contamination in the first place; what changes is how it is
-    presented, not whether it is kept.
+    Discarding the label outright would lose the audit trail that exposed this
+    contamination - counting sources is how 34 documents filed under a
+    nonexistent foundation were found. It is kept in claimed_source, where
+    nothing reads it as provenance.
     """
     store.index(["kubernetes notes with no source line"], "Quazzlemint Foundation")
 
-    assert store.retrieve("kubernetes")[0]["source"] == "Quazzlemint Foundation"
+    assert store.retrieve("kubernetes")[0]["source"] == UNATTRIBUTED
+    assert store.claims("Quazzlemint Foundation") == 1
+
+
+def test_a_document_that_names_its_origin_is_unaffected(store):
+    """Only text with nothing to go on becomes unattributed."""
+    store.index(
+        ["2019 Report\nGrants supported work.\nSource: https://example.org/a.pdf"],
+        "Quazzlemint Foundation 2019 report",
+    )
+
+    hit = store.retrieve("grants")[0]
+
+    assert hit["source"] == "https://example.org/a.pdf"
+    assert store.claims("Quazzlemint Foundation 2019 report") == 1
+
+
+def test_the_claim_is_recorded_even_when_the_document_wins(store):
+    """
+    Both are kept. The document decides what the source IS; the claim stays
+    available for auditing what a caller believed it was indexing.
+    """
+    store.index(["notes\nSource: https://example.org/x"], "web-search")
+
+    assert store.claims("web-search") == 1
+
+
+def test_an_existing_corpus_gains_the_column_without_losing_documents(tmp_path):
+    """
+    The corpus is a persistent volume that survives every deploy, and the one in
+    use holds documents from the first week. A schema change that needed a fresh
+    database would mean choosing between the fix and the data.
+    """
+    path = str(tmp_path / "old.db")
+
+    before = VectorStore(fake_embed, db_path=path)
+    before.index(["kubernetes runs containers"], "eval-fixture")
+
+    # simulate the pre-migration schema by dropping the new column
+    import sqlite3
+
+    db = sqlite3.connect(path)
+    db.execute("ALTER TABLE documents DROP COLUMN claimed_source")
+    db.commit()
+    db.close()
+
+    after = VectorStore(fake_embed, db_path=path)
+
+    assert after.count() == 1, "the document survived"
+    assert after.retrieve("kubernetes")[0]["text"] == "kubernetes runs containers"

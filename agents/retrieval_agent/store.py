@@ -66,9 +66,26 @@ def is_derived(source: str) -> bool:
     return source.startswith(("http://", "https://"))
 
 
-def provenance_of(text: str, fallback: str) -> str:
+# What a document's source is when nothing in it says where it came from.
+#
+# It is not the caller's word for it. Callers were trusted with that, and the
+# model is one of the callers: asked about a foundation that does not exist, it
+# indexed real documents about other foundations and passed the question as the
+# label. Counting the corpus later found the same habit in several shapes -
+# "Quazzlemint Foundation 2019 report", "FIFA World Cup", "www.umfoundation.com",
+# "Report 2019 | Heart and Stroke Foundation" - none distinguishable by any rule
+# from an honest tag like "integration-test", because the difference is not in
+# the string. It is in whether the caller had any way to know.
+#
+# The claim is still kept, in claimed_source, so the corpus can be audited and so
+# the label that exposed this contamination in the first place is not thrown
+# away. It is simply no longer presented as where the document came from.
+UNATTRIBUTED = "unattributed"
+
+
+def provenance_of(text: str, fallback: str | None = None) -> str:
     """
-    Where this specific document came from, preferring what it says itself.
+    Where this specific document came from, according to the document.
 
     WHY THIS EXISTS. The caller used to label a whole batch with one string, and
     the research agent passed the search QUERY: source="web-search: Quazzlemint
@@ -86,7 +103,7 @@ def provenance_of(text: str, fallback: str) -> str:
     can quote anything.
     """
     matches = SOURCE_LINE.findall(text)
-    return matches[-1] if matches else fallback
+    return matches[-1] if matches else (fallback or UNATTRIBUTED)
 
 
 def chunk(texts: list[str]) -> list[str]:
@@ -182,6 +199,12 @@ class VectorStore:
             )
             """
         )
+        # Added after the fact, so ALTER rather than a column in CREATE: an
+        # existing corpus is a persistent volume that survives every deploy, and
+        # the one in use holds documents going back to the first week.
+        columns = {row[1] for row in db.execute("PRAGMA table_info(documents)")}
+        if "claimed_source" not in columns:
+            db.execute("ALTER TABLE documents ADD COLUMN claimed_source TEXT")
         db.execute(
             f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS document_vectors USING vec0(
@@ -238,9 +261,10 @@ class VectorStore:
         """
         Embed and store documents. Returns how many were NEWLY stored.
 
-        `source` is a FALLBACK, not a label applied to everything. Each document
-        that names its own origin keeps it - see provenance_of for the corpus
-        contamination that taught us the difference.
+        `source` is what the CALLER claims, and it is recorded as a claim. A
+        document that names its own origin keeps that as its source; anything
+        else is stored as unattributed with the claim kept in claimed_source.
+        See provenance_of for the contamination that taught us the difference.
 
         Text already in the corpus is skipped - see _new_texts_only. The
         return value is therefore a count of what changed, not of what was
@@ -274,8 +298,9 @@ class VectorStore:
                         f"embedding has {len(embedding)} dimensions, expected {self._dim}"
                     )
                 cursor = db.execute(
-                    "INSERT INTO documents (text, source, created_at) VALUES (?, ?, ?)",
-                    (text, provenance_of(text, source), now),
+                    "INSERT INTO documents (text, source, created_at, claimed_source) "
+                    "VALUES (?, ?, ?, ?)",
+                    (text, provenance_of(text), now, source),
                 )
                 # Reuse the documents row id as the vector rowid so the two
                 # tables line up without a separate mapping.
@@ -326,6 +351,20 @@ class VectorStore:
         if max_distance is None:
             return hits
         return [hit for hit in hits if hit["distance"] <= max_distance]
+
+    def claims(self, label: str) -> int:
+        """
+        How many documents were indexed under a given caller-supplied label.
+
+        The audit route. Counting sources is how 34 documents filed under a
+        foundation that does not exist were found, and moving the claim out of
+        `source` would have removed that ability if nothing replaced it.
+        """
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT COUNT(*) FROM documents WHERE claimed_source = ?", (label,)
+            ).fetchone()
+        return row[0]
 
     def count(self) -> int:
         """Number of documents currently indexed - used by tests and diagnostics."""
