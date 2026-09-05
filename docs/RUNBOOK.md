@@ -124,6 +124,31 @@ closes, or the machine reboots. A rolling update silently breaks them: the
 local port keeps accepting TCP while the tunnel behind it is dead, so a plain
 port check reports "up" misleadingly.
 
+## Following one run across the services
+
+Every run gets an eight-character id, logged by the orchestrator and by every
+agent it calls. Find it, then grep for it:
+
+```bash
+kubectl logs deployment/orchestrator --tail=50 | grep "run start"
+kubectl logs deployment/orchestrator --tail=200 | grep <id>
+kubectl logs statefulset/retrieval-agent --tail=200 | grep <id>
+kubectl logs deployment/research-agent --tail=200 | grep <id>
+```
+
+The orchestrator prints the task, each tool it calls, and the outcome; each
+agent prints one line per call with the tool, status and duration. An agent that
+was not involved simply returns nothing, which is an answer too - a run that
+should have searched and did not shows up as silence in the research agent.
+
+The agents log through FastMCP's rich handler, which wraps at 80 columns without
+a TTY, so the id leads the message and the remaining fields land on the
+continuation line. `kubectl logs ... | tr -s ' ' | grep -A1 <id>` gets the whole
+thing.
+
+Nothing is traced when the id is absent - a tool called by hand, or an older
+orchestrator - and calls still work; the field simply reads `-`.
+
 ## Reproducing a measurement
 
 Claims in `docs/architecture.md` come with numbers. These are how the numbers

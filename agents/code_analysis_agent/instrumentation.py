@@ -38,6 +38,7 @@ carries its own requirements.txt. test_instrumentation.py asserts the copies
 are byte-identical, so the duplication cannot drift silently.
 """
 
+import logging
 import time
 from typing import Any
 
@@ -47,6 +48,27 @@ from prometheus_client import Counter, Histogram
 # Counter: only ever goes up (total calls, total errors)
 # Histogram: a distribution, so p50/p95/p99 latency is available in Grafana
 #            rather than only an average.
+logger = logging.getLogger(__name__)
+
+
+def trace_id_of(context) -> str:
+    """
+    The orchestrator's id for the run this call belongs to, if it sent one.
+
+    It arrives in MCP's `_meta`, which is `extra="allow"`, so an unknown key
+    simply rides along. Anything missing - a call made by hand, an older
+    orchestrator, no request context at all - reads as "-" rather than failing:
+    a tool must not stop working because nobody was watching.
+    """
+    try:
+        request_context = context.request_context
+    except (ValueError, AttributeError):
+        return "-"
+
+    meta = getattr(request_context, "meta", None)
+    return getattr(meta, "traceId", None) or "-" if meta else "-"
+
+
 TOOL_CALLS = Counter(
     "tool_calls_total",
     "Total number of tool calls",
@@ -67,15 +89,29 @@ class InstrumentedMCP(FastMCP):
         # _tool_manager is internal to FastMCP, but so is this override - the
         # alternative is awaiting list_tools() on every single call.
         label = name if self._tool_manager.get_tool(name) else "unknown"
+        trace = trace_id_of(self.get_context())
 
         start = time.time()
+        status = "error"
         try:
             result = await super().call_tool(name, arguments)
         except Exception:
             TOOL_CALLS.labels(tool_name=label, status="error").inc()
             raise
         else:
+            status = "success"
             TOOL_CALLS.labels(tool_name=label, status="success").inc()
             return result
         finally:
-            TOOL_LATENCY.labels(tool_name=label).observe(time.time() - start)
+            elapsed = time.time() - start
+            TOOL_LATENCY.labels(tool_name=label).observe(elapsed)
+            # One line per call, carrying the id the orchestrator generated.
+            # This is what makes four services' logs a single story: grep the
+            # id and the run appears in order, across every pod it touched.
+            # The id leads the message on purpose. The agents log through
+            # FastMCP's rich handler, which wraps long lines, so a token at the
+            # end lands on a continuation line and `kubectl logs | grep <id>`
+            # returns a fragment with none of the fields worth reading.
+            logger.info(
+                "trace=%s tool=%s status=%s seconds=%.3f", trace, label, status, elapsed
+            )

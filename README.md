@@ -209,6 +209,12 @@ real traffic and the error panel could not show that class of failure. They now
 wrap the call itself, above validation. See "Decision: tool metrics are
 recorded at the MCP boundary" in `docs/architecture.md`.
 
+Every run also carries an eight-character id, logged by the orchestrator and by
+each agent it calls, so one request can be followed across four services with a
+single grep. It travels as MCP protocol metadata rather than as a tool argument,
+so it never appears in the schema the model is shown. See "Following one run
+across the services" in `docs/RUNBOOK.md`.
+
 From the orchestrator, about the loop rather than individual tools:
 
 - `orchestrator_runs_total{outcome}` — `answered`, `truncated`, `unanswered`,

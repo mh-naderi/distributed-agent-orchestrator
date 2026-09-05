@@ -43,6 +43,7 @@ from mcp.client.streamable_http import (
 )
 
 from orchestrator.config import AGENT_URLS, MCP_HTTP_TIMEOUT, MCP_READ_TIMEOUT
+from orchestrator.trace import current_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -151,11 +152,20 @@ class MCPToolRegistry:
         if url is None:
             return f"Error: no agent exposes a tool named {name!r}."
 
+        # Sent as protocol metadata rather than as an argument. Arguments are
+        # the model's business and appear in the schema it is shown, so a trace
+        # id there would be one more field for it to get wrong and would change
+        # every tool's signature. MCP already has `_meta` for this, so the
+        # tools never see it and the agents read it without a parameter.
+        trace_id = current_trace_id()
+        meta = {"traceId": trace_id} if trace_id else None
+
+        logger.info("calling %s trace=%s", name, trace_id or "-")
         try:
             async with _session(url) as session:
-                result = await session.call_tool(name, arguments)
+                result = await session.call_tool(name, arguments, meta=meta)
         except Exception as exc:
-            logger.exception("tool %s failed", name)
+            logger.exception("tool %s failed trace=%s", name, trace_id or "-")
             return f"Error calling {name}: {exc}"
 
         # An MCP tool returns a list of content blocks rather than a bare

@@ -27,6 +27,7 @@ Run it:
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
@@ -50,6 +51,7 @@ from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
 from orchestrator.sessions import SessionStore
+from orchestrator import trace
 from orchestrator.metrics import (
     DISCOVERY_FAILURES,
     METRICS_PORT,
@@ -60,6 +62,17 @@ from orchestrator.metrics import (
     REGROUNDS,
     RUNS_QUEUED,
     TOOLS_DISCOVERED,
+)
+
+# Configured here rather than in a __main__ block, because in the container
+# there is no __main__ of ours: uvicorn is the entrypoint and imports this
+# module. Without it the root logger sits at WARNING, uvicorn's access log is
+# the only thing that reaches kubectl logs, and every trace line this module
+# writes is discarded - which is how the first deployment of tracing produced
+# no output at all while looking like it worked.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s %(name)s: %(message)s",
 )
 
 logger = logging.getLogger(__name__)
@@ -360,6 +373,12 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
     """
     started = time.perf_counter()
     run = RunState()
+    # Paired with trace.reset in the outer finally below. A `with` would mean
+    # indenting the whole generator, whose entire shape is yielding from the
+    # middle; the finally that already guarantees the metrics get written
+    # guarantees this too.
+    trace_id, trace_token = trace.begin()
+    logger.info("run start trace=%s task=%r", trace_id, task[:80])
 
     try:
         try:
@@ -455,6 +474,13 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
         RUN_DURATION.observe(time.perf_counter() - started)
         if run.iterations is not None:
             RUN_ITERATIONS.observe(run.iterations)
+        logger.info(
+            "run end trace=%s outcome=%s iterations=%s",
+            trace_id,
+            run.outcome,
+            run.iterations,
+        )
+        trace.reset(trace_token)
 
 
 async def stream(request):

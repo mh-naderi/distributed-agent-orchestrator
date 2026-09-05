@@ -465,6 +465,62 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## One id per run, across four services
+
+The metrics say how many tool calls failed and how long they took. They cannot
+say which run a particular failure belonged to, and with four services logging
+independently, reconstructing one request meant reading three pod logs side by
+side and matching on timestamps. That has already produced wrong conclusions
+here: runs that looked broken turned out to be a dead port-forward and a partial
+tool set rather than anything in the code, and an invalidated measurement was
+only caught because one answer mentioned a tool that should not have been
+reachable.
+
+Each run now carries an eight-character id, logged at its start and end, on every
+MCP call the orchestrator makes, and on every tool call each agent serves.
+
+### It travels as protocol metadata, not as an argument
+
+MCP requests carry a `_meta` field, and `RequestParams.Meta` is declared
+`extra="allow"`, so an unknown key rides along untouched. The client passes
+`meta={"traceId": ...}` and the agent reads it back off the request context.
+
+The alternative - a `trace_id` argument on every tool - would put it in the JSON
+Schema the model is shown. That is one more field for a small model to get wrong,
+on every tool, in exchange for nothing it can use. Tool arguments are the model's
+business; this is the transport's.
+
+### A contextvar, not a parameter
+
+Threading the id through `build_graph`, every node, and the registry would give
+each of them a reason to know about tracing, and the graph is deliberately
+ignorant of what is watching it. A contextvar is set at the edge of a run and
+read at the edge of an MCP call, with nothing in between aware of it.
+
+It also has to be a contextvar rather than a module global: two runs in flight
+would otherwise share whichever id was set last. A test runs two concurrently
+and asserts each keeps its own.
+
+### The absence of an id is never an error
+
+Every way the id can be missing - a tool called by hand, an older orchestrator,
+no request context at all - reads as `-`. A tool must not stop working because
+nobody was watching it, which is the same reasoning as the indexing side effect
+that is allowed to fail without failing the search.
+
+### Deploying it revealed that the orchestrator was logging nothing
+
+The first deployment produced no trace lines at all. `basicConfig` lived in
+`main.py`'s `__main__` block, and in the container there is no `__main__` of
+ours - uvicorn is the entrypoint and imports the module, so the root logger sat
+at WARNING and uvicorn's access log was the only thing reaching `kubectl logs`.
+Every `logger.info` in the orchestrator had been discarded in the cluster since
+it was containerised. Logging is now configured at import, with the level from
+`LOG_LEVEL`.
+
+Worth recording because the feature looked finished at that point: the code was
+correct, the tests passed, and the thing it exists to produce did not exist.
+
 ## The measurements are code now
 
 Every strong claim in this document is a number: routing went 1 in 5 to 5 in 5

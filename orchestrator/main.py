@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
 from orchestrator.llm import get_provider
 from orchestrator.mcp_client import MCPToolRegistry
+from orchestrator.trace import use_trace
+
+logger = logging.getLogger(__name__)
 
 
 async def arun(task: str) -> str:
@@ -45,7 +48,12 @@ async def arun(task: str) -> str:
         "iterations": 0,
     }
 
-    final_state = await graph.ainvoke(initial_state)
+    # The trace has to cover ainvoke, because that is when the tool calls
+    # happen and the id has to be set when the client reads it.
+    with use_trace() as trace_id:
+        logger.info("run start trace=%s task=%r", trace_id, task[:80])
+        final_state = await graph.ainvoke(initial_state)
+
     return final_state["messages"][-1].get("content", "")
 
 
@@ -85,15 +93,21 @@ async def arun_traced(task: str) -> TraceResult:
         )
 
     graph = build_graph(registry, get_provider())
-    final_state = await graph.ainvoke(
-        {
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": task},
-            ],
-            "iterations": 0,
-        }
-    )
+
+    # The eval harness and the experiment runner come through here rather than
+    # through the API, so without this the runs behind every measurement in the
+    # docs would be the ones that could not be followed across the agents.
+    with use_trace() as trace_id:
+        logger.info("run start trace=%s task=%r", trace_id, task[:80])
+        final_state = await graph.ainvoke(
+            {
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": task},
+                ],
+                "iterations": 0,
+            }
+        )
 
     messages = final_state["messages"]
     tools_called = [
