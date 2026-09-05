@@ -13,13 +13,16 @@ leaves no headroom, and the laptop throttles.
 
 ## Host processes
 
-Start Ollama first, on 11500 rather than its default - see the port trap
-below for why:
+Start Ollama first. Its default port is usually fine, and when it is not,
+nothing says so clearly - see the port trap below:
 
 ```bash
-OLLAMA_HOST=127.0.0.1:11500 ollama serve
-OLLAMA_HOST=http://localhost:11500 .venv/Scripts/python.exe -m orchestrator.main
+ollama serve
+OLLAMA_HOST=http://localhost:11434 .venv/Scripts/python.exe -m orchestrator.main
 ```
+
+If it will not bind, pick a free port and pass it to both sides. This runbook
+used to name 11500 as the fallback; on 2026-09-05 that was reserved too.
 
 Each agent in its own terminal:
 
@@ -86,10 +89,10 @@ rebuilding an image you must also `kubectl rollout restart` its workload -
 reloading the same `:latest` tag does not restart anything.
 
 Ollama still runs on the host and must be up before the pods need it, on the
-port the manifests expect (see the port trap below):
+port the manifests expect - 11434 (see the port trap below):
 
 ```bash
-OLLAMA_HOST=127.0.0.1:11500 ollama serve
+ollama serve
 ```
 
 ### Reaching things
@@ -205,6 +208,13 @@ This has hit the project twice with different ports:
 - **11434, Ollama's own default**, fell inside 11359-11458 after a reboot.
   Ollama could not bind its own port. (Later freed again - the ranges move
   both ways, so check rather than assume.)
+- **11434 AND 11500 together**, on 2026-09-05: 11434 inside 11375-11474, 11500
+  inside 11475-11574. The default and the fallback this runbook used to name
+  were gone at once. Nothing said so: Ollama's server never bound, `ollama list`
+  printed its startup log as though all were well, and the first real symptom
+  was an integration test reporting "Failed to connect to Ollama". Treat no port
+  as the fallback - pick one from the current ranges. 18434 was free that day
+  and echoes the 18000-18002 the agents use locally.
 - **4863, the kind API server port**, fell inside 4856-4955 overnight. This one
   was the worst of the three, because nothing chose that port: kind asked the
   OS for an ephemeral one at creation and baked it into the container. A
@@ -238,14 +248,37 @@ Check the current ranges:
 netsh interface ipv4 show excludedportrange protocol=tcp
 ```
 
-To move Ollama, both sides must change. Ollama overloads `OLLAMA_HOST` to mean
-the server's bind address *and* a client's connect URL - different processes,
-so the values differ:
+That prints thirty-odd ranges, which is tedious to scan when the first two
+candidates are already blocked. This answers the question for specific ports:
+
+```powershell
+$out = netsh interface ipv4 show excludedportrange protocol=tcp
+$ranges = @(); foreach ($l in $out) { if ($l -match '^\s*(\d+)\s+(\d+)\s*$') { $ranges += ,@([int]$matches[1], [int]$matches[2]) } }
+foreach ($p in 11434, 11500, 18434) { $hit = $false; foreach ($r in $ranges) { if ($p -ge $r[0] -and $p -le $r[1]) { $hit = $true } }; "$p : $(if ($hit) {'reserved'} else {'FREE'})" }
+```
+
+To move Ollama, every side must change. Ollama overloads `OLLAMA_HOST` to mean
+the server's bind address *and* a client's connect URL - different processes, so
+the values differ:
 
 ```bash
-OLLAMA_HOST=127.0.0.1:11500 ollama serve
-OLLAMA_HOST=http://localhost:11500 .venv/Scripts/python.exe -m orchestrator.main
+OLLAMA_HOST=127.0.0.1:18434 ollama serve
+OLLAMA_HOST=http://localhost:18434 .venv/Scripts/python.exe -m orchestrator.main
 ```
+
+A third side moves with them when the cluster is up. The manifests point the
+retrieval agent and the orchestrator at `host.docker.internal:11434`, and a pod
+that cannot embed fails only when something asks it to - the MCP port opens and
+both probes pass either way. Patch the running workloads rather than editing the
+manifests, so a port that is free again next week does not become a committed
+default:
+
+```bash
+kubectl set env statefulset/retrieval-agent OLLAMA_HOST=http://host.docker.internal:18434
+kubectl set env deployment/orchestrator OLLAMA_HOST=http://host.docker.internal:18434
+```
+
+Both restart their pods, so the port-forwards need restarting afterwards.
 
 ### The GPU is the binding constraint
 
