@@ -19,6 +19,8 @@ too, though nothing in server.py mentions it.
 """
 
 import ast
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -143,3 +145,95 @@ def test_the_check_follows_imports_more_than_one_deep(tmp_path):
 
     assert required_modules(agent) == {"server", "middle", "deep"}
     assert required_modules(agent) - copied_modules(agent) == {"deep"}
+
+
+# ---------------------------------------------------------------------------
+# ...and the dependencies those modules need
+# ---------------------------------------------------------------------------
+# The other half of "would this image actually run". Each agent carries its own
+# requirements.txt, deliberately - the images stay small and independent - and
+# the tests import from the working tree, where the dev virtualenv has every
+# package any agent might want. So an import added without a matching
+# requirements line passes every test here and fails on `pip install` in the
+# build, or worse, at import time in the pod if the package happens to be a
+# transitive dependency of something else.
+
+
+def third_party_imports(agent: Path) -> set[str]:
+    """Non-stdlib, non-local modules imported by anything shipped in the image."""
+    local = local_modules(agent)
+    found: set[str] = set()
+
+    for name in required_modules(agent):
+        path = agent / f"{name}.py"
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                found.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module.split(".")[0])
+
+    return {m for m in found if m not in sys.stdlib_module_names and m not in local}
+
+
+def declared_requirements(agent: Path) -> set[str]:
+    """
+    Package names from requirements.txt, normalised the way PyPI does.
+
+    Extras and version specifiers are stripped, so `mcp[cli]>=1.27,<2` is `mcp`,
+    and underscores become hyphens, so the import `sqlite_vec` lines up with the
+    distribution `sqlite-vec`.
+    """
+    declared = set()
+    for line in (agent / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        line = line.split("#")[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        name = re.split(r"[\[<>=!~;\s]", line, maxsplit=1)[0]
+        if name:
+            declared.add(name.lower().replace("_", "-"))
+    return declared
+
+
+@pytest.mark.parametrize("agent", AGENTS, ids=lambda p: p.name)
+def test_every_third_party_import_is_declared(agent):
+    imported = {m.lower().replace("_", "-") for m in third_party_imports(agent)}
+    missing = imported - declared_requirements(agent)
+
+    assert not missing, (
+        f"{agent.name} imports {sorted(missing)} but its requirements.txt does not "
+        "declare them. The tests pass because the dev virtualenv has them; the "
+        "image would not."
+    )
+
+
+def test_the_dependency_check_would_notice_an_undeclared_import(tmp_path):
+    """
+    The same reasoning as the COPY guard's own guard: this is string handling
+    over two file formats, and a check that quietly matches nothing would report
+    success forever.
+    """
+    agent = tmp_path / "fake_agent"
+    agent.mkdir()
+    (agent / "server.py").write_text("import requests\nimport os\n", encoding="utf-8")
+    (agent / "Dockerfile").write_text("COPY server.py .\n", encoding="utf-8")
+    (agent / "requirements.txt").write_text("# nothing declared\n", encoding="utf-8")
+
+    assert third_party_imports(agent) == {"requests"}, "stdlib must not be flagged"
+    assert declared_requirements(agent) == set()
+
+
+def test_extras_and_pins_do_not_hide_a_declared_package(tmp_path):
+    """`mcp[cli]>=1.27,<2` declares `mcp`; a naive comparison would miss it."""
+    agent = tmp_path / "fake_agent"
+    agent.mkdir()
+    (agent / "server.py").write_text("from mcp import ClientSession\n", encoding="utf-8")
+    (agent / "Dockerfile").write_text("COPY server.py .\n", encoding="utf-8")
+    (agent / "requirements.txt").write_text(
+        "mcp[cli]>=1.27,<2  # comment\nsqlite_vec>=0.1.9\n", encoding="utf-8"
+    )
+
+    assert declared_requirements(agent) == {"mcp", "sqlite-vec"}
+    assert third_party_imports(agent) - declared_requirements(agent) == set()

@@ -491,6 +491,22 @@ and a maintenance script shipped into an image it does not belong in, since
 `backfill_claims.py` is piped through `kubectl exec` and reads the volume rather
 than the image.
 
+The same reading catches the other half of "would this image run": a third-party
+import with no matching line in that agent's `requirements.txt`. Each agent
+carries its own, deliberately, and the tests import from the working tree where
+the dev virtualenv has every package any agent might want - so an undeclared
+import passes every test and fails at `pip install` in the build, or at import
+time in the pod if the package happens to arrive as somebody else's transitive
+dependency. Requirement names are normalised the way PyPI does, since
+`mcp[cli]>=1.27,<2` declares `mcp` and the import `sqlite_vec` is the
+distribution `sqlite-vec`.
+
+That is most of what building the images in CI would have caught, in a fifth of a
+second rather than minutes, and without a Docker daemon on the runner. What it
+still cannot see is a Dockerfile that no longer builds for some other reason - a
+base image that moved, a pip resolution failure - which remains an argument for
+building them in CI eventually, just not an urgent one.
+
 The guard has its own guard. Two tests build a fake agent directory with a
 missing COPY and assert the check notices, because a test that passes by looking
 at the wrong thing is worse than no test, and this one is entirely path
