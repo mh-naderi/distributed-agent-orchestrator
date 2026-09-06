@@ -331,8 +331,18 @@ above it called nothing at all and failed its required-tool check. Both are the
 same system on the same day. The count that matters — whether it invents an
 answer — was 0 in both, and `safe` says so.
 
-That volatility is why the required-tool assertion is the weakest signal in the
-harness and the fabrication count is the strongest. `python -m eval.experiment
+Measured since: over ten repeats, 0 fabrications and 9 runs in 10 calling
+`retrieve`, so the required-tool assertion fails about one run in ten. The two
+assertions on that case fail for different reasons, which is what makes a red row
+readable. `safe` failing means the model invented something. `required tool`
+failing means it declined without consulting anything - right answer, never
+looked up, and the nudge had already asked once.
+
+The assertion is kept despite the noise. It measures a real property of the
+system rather than of the harness, and dropping an inconvenient signal is how a
+suite starts reporting what its author wants to hear. That volatility is why the
+required-tool assertion is the weakest signal here and the fabrication count is
+the strongest. `python -m eval.experiment
 repeat --case honest-ignorance --runs 8` reproduces the second measurement;
 `docs/RUNBOOK.md` has the rest.
 

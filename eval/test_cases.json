@@ -86,7 +86,7 @@
     ],
     "must_contain": [],
     "max_unsupported_claims": 0,
-    "why": "Nothing about this exists, in the corpus or anywhere else. The only correct answer is to say so. This is the failure mode the whole project is organised around - an early run invented a statistic to fill a gap - and until now nothing measured it: the judge scores honest ignorance as well-grounded, so grounding alone cannot tell invention from admission. max_unsupported_claims is what makes fabrication a failing case.",
+    "why": "Nothing about this exists, in the corpus or anywhere else. The only correct answer is to say so. This is the failure mode the whole project is organised around - an early run invented a statistic to fill a gap - and the judge scores honest ignorance as well-grounded, so grounding alone cannot tell invention from admission. max_unsupported_claims and the subject check are what make fabrication a failing case. The case carries TWO assertions and they fail for different reasons, which is worth knowing before reading a red row. A safe failure means the model invented something. A required-tool failure means it declined without consulting anything: the answer was right, but it was not looked up, and the nudge had already asked once. Measured at 1 run in 10 over ten repeats, against 0 fabrications in the same ten. The assertion is kept despite that volatility because it measures a real property of the system rather than of the harness; removing an inconvenient signal is how a suite starts reporting what one wants to hear.",
     "subject": "Quazzlemint Foundation"
   },
   {
