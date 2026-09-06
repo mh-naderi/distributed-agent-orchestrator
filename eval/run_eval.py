@@ -284,6 +284,11 @@ def run_case(case: dict) -> dict:
 
     return {
         "id": case["id"],
+        # Recorded so a row in this file can be taken back to the pod logs. A
+        # case that fails is otherwise a verdict with no way to see what the
+        # services did to produce it, and these runs are the ones behind every
+        # measurement in the docs.
+        "trace_id": trace.trace_id,
         "seeded": seeded,
         "seconds": round(time.time() - started, 1),
         "iterations": trace.iterations,
@@ -310,7 +315,10 @@ def _fmt(value) -> str:
 
 
 def print_table(results: list[dict]) -> None:
-    header = f"{'case':<28} {'req':<5} {'kw':<5} {'safe':<5} {'grnd':<5} {'comp':<5} {'relv':<5} {'iters':<6} {'secs':<6} tools"
+    header = (
+        f"{'case':<28} {'req':<5} {'kw':<5} {'safe':<5} {'grnd':<5} {'comp':<5} "
+        f"{'relv':<5} {'iters':<6} {'secs':<6} {'trace':<9} tools"
+    )
     print("\n" + header)
     print("-" * len(header))
     for r in results:
@@ -335,6 +343,7 @@ def print_table(results: list[dict]) -> None:
             f"{_fmt(r['relevance']):<5} "
             f"{r['iterations']:<6} "
             f"{r['seconds']:<6} "
+            f"{(r.get('trace_id') or '-'):<9} "
             f"{','.join(r['tools_called']) or '-'}"
         )
 

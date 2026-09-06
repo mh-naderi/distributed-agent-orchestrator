@@ -115,7 +115,13 @@ def repeat(case_id: str, runs: int, use_judge: bool) -> list[dict]:
         shown = (invented[0] if invented else result["answer"]) or "(empty)"
         flag = "FAB" if invented else "ok "
         extra = f" grnd={result.get('grounding')}" if use_judge else ""
-        print(f"  {flag} run {i}:{extra} {shown[:88]}".replace("\n", " "))
+        # The id is printed on every row, not only the bad ones: which run
+        # was interesting is often clear only afterwards, by which time the
+        # pod logs have scrolled.
+        trace_id = result.get("trace_id") or "-"
+        print(
+            f"  {flag} run {i}: {trace_id}{extra} {shown[:78]}".replace(chr(10), " ")
+        )
 
     _report(case_id, collected)
     return collected

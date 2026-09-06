@@ -170,7 +170,20 @@ kubectl logs deployment/research-agent --tail=200 | grep <id>
 ```
 
 The orchestrator prints the task, each tool it calls, and the outcome; each
-agent prints one line per call with the tool, status and duration. An agent that
+agent prints one line per call with the tool, status and duration.
+
+An evaluation case that fails can be taken back to the logs the same way. The
+results table has a `trace` column and every row of `eval/results.json` carries
+`trace_id`, so a verdict leads to what the services actually did rather than
+stopping at the verdict:
+
+```bash
+OLLAMA_HOST=http://localhost:11434 .venv/Scripts/python.exe -m eval.run_eval
+kubectl logs statefulset/retrieval-agent --tail=200 | grep <trace from the failing row>
+```
+
+These runs go through `arun_traced` rather than the API, which is the point:
+they are the ones behind every measurement in the docs. An agent that
 was not involved simply returns nothing, which is an answer too - a run that
 should have searched and did not shows up as silence in the research agent.
 

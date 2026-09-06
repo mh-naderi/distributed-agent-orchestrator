@@ -74,6 +74,11 @@ class TraceResult:
     tool_outputs: list[dict]
     iterations: int
 
+    # The id the agents logged this run under. Without it a case that failed is
+    # a result with no way back to what the services actually did - and these
+    # runs, not the API's, are the ones behind every measurement in the docs.
+    trace_id: str | None = None
+
 
 async def arun_traced(task: str) -> TraceResult:
     """
@@ -108,6 +113,7 @@ async def arun_traced(task: str) -> TraceResult:
                 "iterations": 0,
             }
         )
+        logger.info("run end trace=%s iterations=%s", trace_id, final_state["iterations"])
 
     messages = final_state["messages"]
     tools_called = [
@@ -127,6 +133,7 @@ async def arun_traced(task: str) -> TraceResult:
         tools_called=tools_called,
         tool_outputs=tool_outputs,
         iterations=final_state["iterations"],
+        trace_id=trace_id,
     )
 
 

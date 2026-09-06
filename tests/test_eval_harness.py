@@ -633,3 +633,68 @@ def test_no_x_were_found_is_a_denial_but_an_invention_is_not(sentence, is_denial
     result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
 
     assert (result["invented_subject_claims"] == []) is is_denial
+
+
+# ---------------------------------------------------------------------------
+# Getting from a result back to the logs
+# ---------------------------------------------------------------------------
+
+
+class _FakeTrace:
+    answer = "an answer"
+    tools_called = ["retrieve"]
+    tool_outputs = [{"name": "retrieve", "output": "a document"}]
+    iterations = 2
+    trace_id = "cafe1234"
+
+
+def test_a_result_records_the_id_the_agents_logged_it_under(monkeypatch):
+    """
+    A failing case is otherwise a verdict with no way back to what the services
+    actually did. These runs go through arun_traced rather than the API, so
+    without this the runs behind every measurement in the docs are exactly the
+    ones that cannot be followed.
+    """
+    monkeypatch.setattr(run_eval, "run_traced", lambda task: _FakeTrace())
+    monkeypatch.setattr(
+        run_eval,
+        "judge",
+        lambda *a, **k: {
+            "grounding": 5,
+            "completeness": 5,
+            "relevance": 5,
+            "unsupported_claims": [],
+            "reasoning": "",
+            "judge_model": "fake",
+        },
+    )
+
+    result = run_eval.run_case({"id": "x", "task": "t", "must_contain": []})
+
+    assert result["trace_id"] == "cafe1234"
+
+
+def test_a_run_without_an_id_still_produces_a_result(monkeypatch):
+    """Tracing is observation. A result must not depend on it having worked."""
+
+    class Untraced(_FakeTrace):
+        trace_id = None
+
+    monkeypatch.setattr(run_eval, "run_traced", lambda task: Untraced())
+    monkeypatch.setattr(
+        run_eval,
+        "judge",
+        lambda *a, **k: {
+            "grounding": 5,
+            "completeness": 5,
+            "relevance": 5,
+            "unsupported_claims": [],
+            "reasoning": "",
+            "judge_model": "fake",
+        },
+    )
+
+    result = run_eval.run_case({"id": "x", "task": "t", "must_contain": []})
+
+    assert result["trace_id"] is None
+    assert result["grounding"] == 5
