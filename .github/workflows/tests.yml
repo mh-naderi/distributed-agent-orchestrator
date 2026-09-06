@@ -1,11 +1,11 @@
 # Continuous integration.
 #
-# WHAT THIS CAN AND CANNOT TELL YOU. 76 of the 85 tests need no agents, no
-# cluster, no GPU and no Ollama - they run anywhere in seconds. The other 9 are
+# WHAT THIS CAN AND CANNOT TELL YOU. 375 of the 385 tests need no agents, no
+# cluster, no GPU and no Ollama - they run anywhere in seconds. The other 10 are
 # integration tests that skip when the agent servers are unreachable, which is
 # always the case here.
 #
-# That skip is deliberate, and it has a cost worth stating plainly: those 9
+# That skip is deliberate, and it has a cost worth stating plainly: those 10
 # tests are exactly the ones that once sat out a whole day of local runs while
 # two of them were stale and failing. A green tick here means the loop, the
 # store, the analyser, the SSE layer and the eval harness are sound. It does
@@ -13,6 +13,14 @@
 #
 # Hence -rs: skipped tests are listed with their reason, so the log says what
 # was not covered rather than quietly reporting a smaller number.
+#
+# The images job covers a gap the tests cannot. tests/test_agent_images.py
+# already checks by READING that each Dockerfile copies every module its agent
+# imports and that every third-party import is declared - most of the risk, in a
+# fifth of a second. What reading cannot see is a build that stops working for a
+# reason no source file mentions: a base image that moved, a pip resolution
+# failure, a wheel that no longer publishes for python:3.12-slim. Those surface
+# by building, or they surface at deploy time.
 
 name: tests
 
@@ -62,3 +70,51 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q -rs
+
+  images:
+    # Deliberately not `needs: test`. A broken Dockerfile and a broken test are
+    # independent failures, and chaining them would hide the second until the
+    # first was fixed. In parallel they finish at about the same time anyway.
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: research-agent
+            context: agents/research_agent
+            imports: server
+          - name: retrieval-agent
+            context: agents/retrieval_agent
+            imports: server
+          - name: code-analysis-agent
+            context: agents/code_analysis_agent
+            imports: server
+          # The odd one out: the agents are self-contained server.py files
+          # copied to /app, while this is a package copied to /app/orchestrator,
+          # so it is imported by its package path rather than as `server`.
+          - name: orchestrator
+            context: orchestrator
+            imports: orchestrator.api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.name }}
+        run: docker build -t agent-orchestrator/${{ matrix.name }}:ci ${{ matrix.context }}
+
+      - name: Import what the image is meant to run
+        # The build proves pip resolved. This proves the result imports, which
+        # is the failure that actually reaches production: a missing COPY or an
+        # undeclared dependency builds cleanly and crash-loops on deploy. Unlike
+        # the reading-based checks in tests/test_agent_images.py, this runs the
+        # real image.
+        #
+        # Import rather than run: the entrypoint would start a server and block.
+        # It is the same module either way, so anything broken at import breaks
+        # the container. Importing the orchestrator binds nothing - there is a
+        # test for that specifically.
+        run: |
+          docker run --rm --entrypoint python \
+            agent-orchestrator/${{ matrix.name }}:ci \
+            -c "import ${{ matrix.imports }}"
