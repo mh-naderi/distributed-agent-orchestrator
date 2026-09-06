@@ -111,7 +111,9 @@ async def test_normal_run_streams_the_full_sequence(wire):
     events = await collect("What is MCP?")
     names = [name for name, _ in events]
 
-    assert names == ["tools", "tool_call", "tool_result", "answer", "done"]
+    # "run" leads every stream: it carries the id, and it is emitted before
+    # anything that can fail, so a run that dies during discovery still has one.
+    assert names == ["run", "tools", "tool_call", "tool_result", "answer", "done"]
     assert dict(events)["answer"]["content"] == "MCP is an open standard."
 
 
@@ -156,7 +158,7 @@ async def test_discovery_failure_is_reported_and_stops_the_run(wire):
 
     events = await collect("anything")
 
-    assert [name for name, _ in events] == ["run_error"]
+    assert [name for name, _ in events] == ["run", "run_error"]
     assert "agent servers" in dict(events)["run_error"]["message"]
 
 
@@ -298,7 +300,7 @@ async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
     monkeypatch.setattr(api, "get_provider", lambda *a, **k: ScriptedProvider([]))
 
     events = await collect("while down")
-    assert [name for name, _ in events] == ["run_error"]
+    assert [name for name, _ in events] == ["run", "run_error"]
 
     # The agents come back.
     registry.tools = DiscoverableRegistry().tools
@@ -313,7 +315,7 @@ async def test_agents_coming_back_are_picked_up_without_a_restart(monkeypatch):
     events = await collect("after recovery")
     # The scripted answer carries no tool call, so the loop asks once more
     # before accepting it - see graph.NUDGE_PROMPT.
-    assert [name for name, _ in events] == ["tools", "nudge", "answer", "done"]
+    assert [name for name, _ in events] == ["run", "tools", "nudge", "answer", "done"]
 
 
 async def test_concurrent_first_requests_discover_once(monkeypatch):
@@ -407,9 +409,9 @@ async def test_the_queue_is_announced_before_the_wait(monkeypatch):
     await provider.entered.wait()
 
     stream = api._run("second")
-    seen = [(await stream.__anext__())["event"] for _ in range(2)]
+    seen = [(await stream.__anext__())["event"] for _ in range(3)]
 
-    assert seen == ["tools", "queued"]
+    assert seen == ["run", "tools", "queued"]
 
     provider.release.set()
     await stream.aclose()
@@ -433,7 +435,7 @@ async def test_runs_beyond_the_queue_cap_are_refused(monkeypatch):
 
     refused = await collect("refused")
 
-    assert [name for name, _ in refused] == ["tools", "busy"]
+    assert [name for name, _ in refused] == ["run", "tools", "busy"]
     assert "refused" in dict(refused)["busy"]["message"]
 
     provider.release.set()
@@ -596,7 +598,7 @@ async def test_a_narrated_tool_call_never_reaches_the_page_as_an_answer(wire):
     names = [name for name, _ in events]
     answers = [payload["content"] for name, payload in events if name == "answer"]
 
-    assert names == ["tools", "nudge", "answer", "done"]
+    assert names == ["run", "tools", "nudge", "answer", "done"]
     assert answers == ["the real answer"]
     assert not any("Let's do that first" in a for a in answers)
 
@@ -631,7 +633,14 @@ async def test_a_run_that_used_a_tool_is_not_nudged(wire):
     events = await collect("a real question")
 
     assert "nudge" not in [name for name, _ in events]
-    assert [name for name, _ in events] == ["tools", "tool_call", "tool_result", "answer", "done"]
+    assert [name for name, _ in events] == [
+        "run",
+        "tools",
+        "tool_call",
+        "tool_result",
+        "answer",
+        "done",
+    ]
 
 
 async def test_the_loop_nudges_at_most_once(wire):
@@ -689,3 +698,60 @@ async def test_an_unanswered_run_is_counted_separately(wire):
     await collect("what did they conclude?")
 
     assert runs("unanswered") == before + 1
+
+
+# ---------------------------------------------------------------------------
+# The run id, as the page sees it
+# ---------------------------------------------------------------------------
+
+
+async def test_the_run_id_is_the_first_thing_the_page_hears(wire):
+    """
+    Before the tools event and before anything that can fail. A run that dies
+    during discovery is exactly the one somebody will want to report, and an id
+    that only arrived on the happy path would be missing whenever it mattered.
+    """
+    wire(ScriptedProvider([LLMResponse(content="an answer")]))
+
+    events = await collect("anything")
+
+    assert events[0][0] == "run"
+    assert len(events[0][1]["trace"]) == 8
+
+
+async def test_a_run_that_fails_before_discovery_still_reports_its_id(monkeypatch, wire):
+    """The case the ordering exists for."""
+
+    class Broken:
+        async def get(self):
+            raise RuntimeError("agents unreachable")
+
+    wire(ScriptedProvider([LLMResponse(content="unused")]))
+    monkeypatch.setattr(api, "_registry_cache", Broken())
+
+    events = await collect("anything")
+    names = [name for name, _ in events]
+
+    assert names == ["run", "run_error"]
+    assert dict(events)["run"]["trace"]
+
+
+async def test_the_id_matches_the_one_the_agents_were_sent(wire):
+    """
+    The whole point: the id on the page is the id in the pod logs. A different
+    one per surface would be worse than none, because it would look correlated.
+    """
+    seen = {}
+
+    class Recording:
+        async def chat(self, messages, tools):
+            from orchestrator.trace import current_trace_id
+
+            seen["during_run"] = current_trace_id()
+            return LLMResponse(content="an answer")
+
+    wire(Recording())
+
+    events = await collect("anything")
+
+    assert dict(events)["run"]["trace"] == seen["during_run"]

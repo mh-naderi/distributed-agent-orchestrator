@@ -160,7 +160,8 @@ con.execute('VACUUM INTO ?', (f'{db}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}
 ## Following one run across the services
 
 Every run gets an eight-character id, logged by the orchestrator and by every
-agent it calls. Find it, then grep for it:
+agent it calls, and shown at the foot of the page so somebody reporting a wrong
+answer can quote it without reading any logs. Find it, then grep for it:
 
 ```bash
 kubectl logs deployment/orchestrator --tail=50 | grep "run start"

@@ -380,6 +380,12 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
     trace_id, trace_token = trace.begin()
     logger.info("run start trace=%s task=%r", trace_id, task[:80])
 
+    # Emitted before anything that can fail, and before the tools event: a run
+    # that dies during discovery is exactly the one somebody will want to report,
+    # and an id that only arrives on the happy path would be missing whenever it
+    # mattered.
+    yield _sse("run", trace=trace_id)
+
     try:
         try:
             registry = await _registry_cache.get()

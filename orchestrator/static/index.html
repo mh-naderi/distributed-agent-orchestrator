@@ -22,6 +22,10 @@
   .nudge      { border-color: #7c3aed; background: #faf5ff; }
   #esc        { font-size: .85rem; opacity: .8; margin-left: .6rem; }
   .busy       { border-color: #dc2626; background: #fef2f2; }
+  .reground   { border-color: #7c3aed; background: #faf5ff; }
+  .unanswered { border-color: #dc2626; background: #fef2f2; }
+  #runid      { font-size: .78rem; opacity: .6; margin-top: 1rem; font-family: ui-monospace, monospace; }
+  #runid[hidden] { display: none; }
   .answer pre { font-size: .95rem; opacity: 1; }
 </style>
 
@@ -38,10 +42,12 @@
 </form>
 
 <div id="out"></div>
+<div id="runid" hidden></div>
 
 <script>
   const out = document.getElementById('out');
   const go = document.getElementById('go');
+  const runid = document.getElementById('runid');
   let source;
 
   // A new id per page load; 'New' mints another, which is what makes
@@ -73,6 +79,7 @@
   document.getElementById('f').onsubmit = (e) => {
     e.preventDefault();
     out.innerHTML = '';
+    runid.hidden = true;
     go.disabled = true;
     go.textContent = 'Running…';
 
@@ -84,6 +91,13 @@
     const params = new URLSearchParams({ task: document.getElementById('task').value, session: sessionId });
     if (escalate) params.set('escalate', '1');
     source = new EventSource('/stream?' + params.toString());
+
+    // Shown rather than logged: somebody reporting a wrong answer can quote
+    // this, and it is the same id the four services logged the run under.
+    source.addEventListener('run', (e) => {
+      runid.textContent = 'run ' + JSON.parse(e.data).trace;
+      runid.hidden = false;
+    });
 
     source.addEventListener('tools', (e) =>
       step('tools', 'tools discovered', JSON.parse(e.data).tools.join(', ')));
@@ -105,6 +119,15 @@
     // than competing. Announced, because a silent wait looks like a hang.
     source.addEventListener('nudge', (e) =>
       step('nudge', 'asked again', JSON.parse(e.data).message));
+
+    // Both of these were already being sent and silently dropped here, so a
+    // regrounded run showed an unexplained pause - the very thing announcing
+    // the nudge exists to prevent - and an unanswered one showed nothing at all.
+    source.addEventListener('reground', (e) =>
+      step('reground', 'asked again', JSON.parse(e.data).message));
+
+    source.addEventListener('unanswered', (e) =>
+      step('unanswered', 'no answer', JSON.parse(e.data).content));
 
     source.addEventListener('queued', (e) =>
       step('queued', 'waiting for a slot',
