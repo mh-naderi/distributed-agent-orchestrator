@@ -465,6 +465,39 @@ attached to the choice it informs.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
+## The images are checked by reading, not by building
+
+Each agent builds from its own directory and its Dockerfile names the files to
+copy one by one. That is the price of the duplication the split buys - each
+image stays small and independent - and it has a failure mode with no local
+signal: adding `instrumentation.py` needed a matching COPY line, and so did
+`coverage.py`. Both were remembered by hand.
+
+The third time would not fail in the build. An image builds perfectly well
+without a file nothing in the build references; it fails on deploy as a crash
+loop on import, or later still if the missing module is only reached when a
+particular tool runs. The tests would not see it either, because they import
+from the working tree rather than from the image.
+
+`tests/test_agent_images.py` reads each agent's imports, follows them
+transitively, and asserts the Dockerfile copies every local module reachable
+from `server.py`. Reading rather than building is the point: the question is not
+"does this image build" but "does it contain what the code needs", which needs no
+Docker, runs in a fifth of a second, and names the missing file and the
+Dockerfile instead of leaving a traceback in a pod log.
+
+It checks the other direction too - a COPY naming a file that no longer exists,
+and a maintenance script shipped into an image it does not belong in, since
+`backfill_claims.py` is piped through `kubectl exec` and reads the volume rather
+than the image.
+
+The guard has its own guard. Two tests build a fake agent directory with a
+missing COPY and assert the check notices, because a test that passes by looking
+at the wrong thing is worse than no test, and this one is entirely path
+handling. Verified once by hand as well: removing `coverage.py` from the
+retrieval agent's Dockerfile fails with "retrieval_agent/Dockerfile does not COPY
+['coverage']".
+
 ## One id per run, across four services
 
 The metrics say how many tool calls failed and how long they took. They cannot
