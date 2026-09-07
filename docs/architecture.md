@@ -1,5 +1,55 @@
 # Architecture Notes
 
+## What is in this document
+
+Twenty-eight sections, most of them short. They are grouped here rather than
+listed in order, because the order is chronological - the document grew as the
+project did - and chronology is rarely what a reader wants.
+
+**How the system is put together.** The decisions taken before anything was
+measured - what the pieces are and why they are separate.
+
+- [Why MCP, and why multiple servers](#why-mcp-and-why-multiple-servers)
+- [The agents](#the-agents)
+- [Stateful vs stateless, and why it matters here](#stateful-vs-stateless-and-why-it-matters-here)
+- [A stateless agent is not a stateless protocol](#a-stateless-agent-is-not-a-stateless-protocol)
+- [Transport: HTTP+SSE to Streamable HTTP](#transport-httpsse-to-streamable-http)
+- [Sync vs. async tool execution](#sync-vs-async-tool-execution)
+- [Retrieval design notes](#retrieval-design-notes)
+- [Observability](#observability)
+- [Decision: the producer indexes its own output](#decision-the-producer-indexes-its-own-output)
+- [Decision: tool metrics are recorded at the MCP boundary](#decision-tool-metrics-are-recorded-at-the-mcp-boundary)
+
+**What was deliberately not built.** Absences are decisions too, and the
+reasoning for them is easier to lose than the reasoning for code.
+
+- [Decision: why the summarizer agent was removed](#decision-why-the-summarizer-agent-was-removed)
+- [Design: the code execution sandbox, and why it is not built](#design-the-code-execution-sandbox-and-why-it-is-not-built)
+- [Hardware constraints, and what they forced](#hardware-constraints-and-what-they-forced)
+- [Local-only, no cloud budget](#local-only-no-cloud-budget)
+
+**What measurement changed.** Each of these began as an assumption that a run
+contradicted. They are the ones worth reading if you want to know how the
+system actually behaves rather than how it was meant to.
+
+- [Grounding, and why the stubs had to go](#grounding-and-why-the-stubs-had-to-go)
+- [Adding a tool is mechanically free and behaviourally not](#adding-a-tool-is-mechanically-free-and-behaviourally-not)
+- [The corpus learned to vouch for a fiction](#the-corpus-learned-to-vouch-for-a-fiction)
+- [Decision: a failed search is not an absence](#decision-a-failed-search-is-not-an-absence)
+- [Saying which results are not about what was asked](#saying-which-results-are-not-about-what-was-asked)
+- [The guardrail for answering from nothing](#the-guardrail-for-answering-from-nothing)
+- [When asking again does not work](#when-asking-again-does-not-work)
+- [A signal for claims about a subject the evidence never mentioned](#a-signal-for-claims-about-a-subject-the-evidence-never-mentioned)
+- [One case that checks whether the answer is true](#one-case-that-checks-whether-the-answer-is-true)
+
+**How the claims here are kept honest.** A document full of numbers is only
+worth as much as the ability to re-take them.
+
+- [The measurements are code now](#the-measurements-are-code-now)
+- [The images are checked by reading, not by building](#the-images-are-checked-by-reading-not-by-building)
+- [One id per run, across four services](#one-id-per-run-across-four-services)
+- [Known gaps](#known-gaps)
+- [Build plan](#build-plan)
 ## Why MCP, and why multiple servers
 
 MCP standardizes how an agent discovers and calls tools, independent of
