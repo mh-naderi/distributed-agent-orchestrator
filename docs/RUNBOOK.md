@@ -13,8 +13,8 @@ leaves no headroom, and the laptop throttles.
 
 ## Host processes
 
-Start Ollama first. Its default port is usually fine, and when it is not,
-nothing says so clearly - see the port trap below:
+Start Ollama first. Its default port is usually fine; when it is not, how
+loudly it says so depends on how it was started - see the port trap below:
 
 ```bash
 ollama serve
@@ -45,6 +45,23 @@ or the streaming UI at http://localhost:18080 :
 ```
 
 ## Kubernetes
+
+If the cluster already exists but is stopped - which is the normal daily
+case, see "Stopping and starting again" below - start it rather than creating
+it:
+
+```bash
+docker start agent-orchestrator-control-plane
+```
+
+Everything comes back: the workloads, the ingress, and the corpus on the
+PersistentVolume. No rebuild, no re-apply. The API server takes about ten
+seconds and the pods another thirty.
+
+`kind create cluster` is for the FIRST time only. Run against an existing
+cluster it stops with `ERROR: failed to create cluster: node(s) already exist
+for a cluster with the name "agent-orchestrator"` and offers nothing further,
+which is a dead end worth knowing before meeting it.
 
 Create the cluster **with the config file**:
 
@@ -97,9 +114,14 @@ ollama serve
 
 ### Reaching things
 
-Install the ingress controller once per cluster (it is not applied by
-`kubectl apply -f k8s/`, which is non-recursive on purpose - its admission Jobs
-are immutable and would fail on every re-apply):
+Install the ingress controller once per cluster. It lives in a subdirectory
+and `kubectl apply -f k8s/` is non-recursive, so it is not applied by that
+command and does not need to be - it survives a cluster stop and start like
+everything else. (An earlier note here said a re-apply would fail because the
+admission Jobs are immutable. Re-applying `deploy.yaml` against an existing
+install was tested on 2026-09-07 and reported only `unchanged` and `configured`,
+so that is not a reason to avoid it; keeping it out of the main apply is simply
+tidier.)
 
 ```bash
 kubectl apply -f k8s/ingress-nginx/deploy.yaml
@@ -254,15 +276,40 @@ when it restarts:
 curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18080/stream
 ```
 
-## Stopping everything
+## Stopping and starting again
+
+Stop the cluster; do not delete it. `docker stop` keeps the PersistentVolume and
+everything on it, and `docker start` brings the whole cluster back:
+
+```bash
+docker stop agent-orchestrator-control-plane
+```
+
+**Order matters for the rest, and getting it wrong looks like it worked.** Quit
+Docker Desktop BEFORE `wsl --shutdown`: otherwise its still-running UI restarts
+the WSL backend, which restarts the kind node - which carries
+`--restart=on-failure:1`, and every stop exits 137 because the node does not
+handle SIGTERM in time, so Docker treats a clean stop as a failure and starts it
+again. `vmmemWSL` comes back with it.
+
+```powershell
+Get-Process | Where-Object { $_.ProcessName -match '^(kubectl|ollama)$' } | Stop-Process -Force
+Get-Process | Where-Object { $_.ProcessName -match 'Docker Desktop|com\.docker' } | Stop-Process -Force
+wsl --shutdown
+```
+
+Verify with `Get-Process`, not with `tasklist` piped through grep in Git Bash:
+the Bash tool's PATH sometimes arrives with Windows-style separators, and a
+missing `tasklist` makes `grep -c` print 0, which reads as "all stopped" and is
+not. `wsl --shutdown` sometimes needs running twice; check that `vmmemWSL` is
+gone.
+
+To destroy the cluster and its data deliberately - a genuine reset, not a daily
+stop:
 
 ```bash
 kind delete cluster --name agent-orchestrator   # destroys the PVC and its data
-wsl --shutdown                                  # reclaims Docker's VM memory
 ```
-
-`wsl --shutdown` often needs running twice - the VM does not always release
-memory on the first call. Verify with Task Manager that `vmmemWSL` is gone.
 
 ## Traps
 
@@ -351,6 +398,17 @@ kubectl set env deployment/orchestrator OLLAMA_HOST=http://host.docker.internal:
 ```
 
 Both restart their pods, so the port-forwards need restarting afterwards.
+
+**`kubectl apply -f k8s/` silently undoes this.** The manifests name 11434, so a
+re-apply puts it back - reported as `statefulset.apps/retrieval-agent
+configured` among a screen of `unchanged` lines, which is easy to read past. The
+pods then point at a port Ollama could not bind, both probes still pass, and the
+failure arrives later as "Failed to connect to Ollama" from whatever first
+needed an embedding. After any `kubectl apply -f k8s/`, check:
+
+```bash
+kubectl get statefulset retrieval-agent -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OLLAMA_HOST")].value}'
+```
 
 ### The GPU is the binding constraint
 
