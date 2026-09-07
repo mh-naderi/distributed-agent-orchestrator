@@ -178,10 +178,17 @@ Prometheus and Grafana deploy with everything else.
 
 A real capture of the running stack, not a mock-up — the dashboard is
 provisioned from a ConfigMap, so this is what comes up on a fresh deploy. The
-orchestrator panels are sparse because only a handful of runs went through the
-deployed service inside that window; the tool panels are busier because the
-evaluation harness had just run. `docs/RUNBOOK.md` has the one-line command that
-regenerates this image.
+window is thirty minutes and holds five runs driven through the deployed
+orchestrator, which is why the tool and agent panels have shape rather than a
+single spike at the edge. `docs/RUNBOOK.md` has the command that regenerates it.
+
+Two panels were corrected while taking this. "Documents in corpus" plotted one
+number per Prometheus series and so showed three different totals, all of them
+stale instances left by pod restarts; it takes the `max` now, because there is
+one corpus. And "Search outcomes" can visibly *fall*, which a cumulative counter
+should never do — it sums across two research-agent replicas, and a restart
+resets one to zero. The panel says so rather than leaving a reader to work out
+why a total went backwards.
 
 Grafana is behind the ingress at `http://localhost:18080/grafana/` — no
 port-forward — with its datasource and dashboard already provisioned.
