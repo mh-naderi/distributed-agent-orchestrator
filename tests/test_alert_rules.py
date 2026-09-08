@@ -106,6 +106,20 @@ def base_name(metric: str) -> str:
     return metric
 
 
+def write_rules_file(path: Path) -> Path:
+    """
+    Extract the rules from the ConfigMap into a plain file promtool can read.
+
+    The rules live inside a Kubernetes ConfigMap so that `kubectl apply -f k8s/`
+    deploys them with everything else, and promtool wants a bare rules file.
+    Rather than keep a second copy in sync, CI calls this module as a script to
+    bridge the two - see the alerts job in .github/workflows/tests.yml.
+    """
+    path.write_text(named("ConfigMap", "prometheus-rules")["data"]["alerts.yml"],
+                    encoding="utf-8")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # The check that matters
 # ---------------------------------------------------------------------------
@@ -270,3 +284,10 @@ def test_the_metric_check_would_notice_a_typo():
         '(rate(orchestrator_run_duration_seconds_bucket[30m]))) > 300'
     )
     assert {base_name(m) for m in metrics_in(real)} - known - SYNTHETIC_METRICS == set()
+
+
+if __name__ == "__main__":
+    # Not a test entry point: CI uses this to hand the rules to promtool.
+    import sys
+
+    print(write_rules_file(Path(sys.argv[1])))

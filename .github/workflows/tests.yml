@@ -14,6 +14,14 @@
 # Hence -rs: skipped tests are listed with their reason, so the log says what
 # was not covered rather than quietly reporting a smaller number.
 #
+# The alerts job covers a different gap. tests/test_alert_rules.py checks by
+# READING that every alert names a metric this repo declares and is wired into
+# the Deployment - which catches the failure mode alerting is worst at, a rule
+# that loads healthy and can never fire. What reading cannot decide is whether
+# an expression fires at the right moment. promtool evaluates the rules against
+# synthetic series and answers that, using the same Prometheus version the
+# cluster runs.
+#
 # The images job covers a gap the tests cannot. tests/test_agent_images.py
 # already checks by READING that each Dockerfile copies every module its agent
 # imports and that every third-party import is declared - most of the risk, in a
@@ -70,6 +78,65 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q -rs
+
+  alerts:
+    # Independent of both other jobs, for the same reason images is: a broken
+    # alert rule and a broken test are different failures, and chaining them
+    # would hide the second behind the first.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install what the extractor needs
+        # Only the two imports tests/test_alert_rules.py has. The full dev
+        # requirements would pull the whole orchestrator stack to read a YAML
+        # file.
+        run: python -m pip install --quiet pyyaml pytest
+
+      - name: Extract the rules from the ConfigMap
+        # The rules ship inside a Kubernetes ConfigMap so `kubectl apply -f
+        # k8s/` deploys them with everything else; promtool wants a bare rules
+        # file. The extraction lives in the test module rather than here, so
+        # there is one definition of where the rules are and not two.
+        #
+        # Into RUNNER_TEMP, not the checkout: promtool resolves rule_files
+        # relative to the working directory, so the rules and the fixture have
+        # to sit together, and a generated file in tests/ would be one more
+        # thing to gitignore.
+        run: |
+          python tests/test_alert_rules.py "$RUNNER_TEMP/alerts.yml"
+          cp tests/alerts_test.yml "$RUNNER_TEMP/alerts_test.yml"
+
+      - name: Refuse to check nothing
+        # promtool reports SUCCESS for an empty test file. That is not
+        # hypothetical - the first local run of these tests passed against a
+        # fixture that had silently transferred as zero bytes, and proved
+        # exactly nothing. A green tick that means "there was nothing to check"
+        # is worse than a red one.
+        run: |
+          test -s "$RUNNER_TEMP/alerts.yml"
+          test -s "$RUNNER_TEMP/alerts_test.yml"
+
+      - name: Evaluate the rules with the deployed Prometheus
+        # The image is read from k8s/prometheus.yaml rather than pinned here,
+        # so CI cannot drift onto a different promtool than the cluster runs.
+        run: |
+          IMAGE=$(python -c "
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open('k8s/prometheus.yaml', encoding='utf-8')) if d]
+          dep = next(d for d in docs if d['kind'] == 'Deployment')
+          print(dep['spec']['template']['spec']['containers'][0]['image'])
+          ")
+          echo "using $IMAGE"
+          docker run --rm -v "$RUNNER_TEMP:/w" -w /w --entrypoint promtool "$IMAGE" \
+            check rules alerts.yml
+          docker run --rm -v "$RUNNER_TEMP:/w" -w /w --entrypoint promtool "$IMAGE" \
+            test rules alerts_test.yml
 
   images:
     # Deliberately not `needs: test`. A broken Dockerfile and a broken test are
