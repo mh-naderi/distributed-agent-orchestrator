@@ -55,6 +55,17 @@ data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
+      # How often the alert rules below are evaluated. Left unset this is 1m,
+      # which is slower than the 15s scrape and makes a firing alert look
+      # laggy for no reason. It is not free - every rule runs every interval -
+      # but there are nine of them over a handful of series.
+      evaluation_interval: 30s
+
+    # Mounted from the prometheus-rules ConfigMap. A glob rather than a
+    # filename so adding a second rules file needs no change here; Prometheus
+    # fails to start if a listed file is missing, but an empty glob is fine.
+    rule_files:
+      - /etc/prometheus/rules/*.yml
 
     scrape_configs:
       - job_name: "agents"
@@ -93,6 +104,194 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
+---
+# Alert rules.
+#
+# WHAT THIS DOES AND DOES NOT DO. There is no Alertmanager here. Alertmanager
+# exists to ROUTE alerts - to email, Slack, PagerDuty - and this project has
+# none of those. Prometheus evaluates these rules and shows what is firing at
+# /alerts by itself, which is where they are meant to be read. Nothing here
+# pages anyone, and nothing here wakes anybody up. It is the difference between
+# "the system can say it is unwell" and "someone will be told", and only the
+# first is claimed.
+#
+# WHERE THE NUMBERS COME FROM. Prometheus keeps 6h of data in an emptyDir, so
+# there is no long history to fit thresholds against, and inventing plausible
+# percentages would have produced alerts that fire on nothing in particular.
+# Every threshold below is instead derived from something already fixed: a
+# configured limit, a bound the code enforces, or the stated meaning of the
+# counter in orchestrator/metrics.py. Where no such anchor existed, the rule
+# asks whether a failure is the MAJORITY of what happened rather than guessing
+# at a rate - "most runs are doing this" needs no calibration to be alarming.
+#
+# The rate() expressions produce no series at all when nothing is running, so
+# an idle cluster fires nothing. That is why the ratios need no "and enough
+# traffic" guard clause.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+data:
+  alerts.yml: |
+    groups:
+      # ------------------------------------------------------------------
+      # Is the system there at all
+      # ------------------------------------------------------------------
+      - name: availability
+        rules:
+          - alert: ScrapeTargetDown
+            # up == 0 means the pod exists and the metrics port did not
+            # answer. A DELETED pod does not appear here at all - its series
+            # stop, they do not go to zero - which is what the next rule is
+            # for. 2m rather than instant: a rolling update briefly fails a
+            # scrape, and that is not worth reporting.
+            expr: up{job="agents"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ $labels.agent }} is not serving metrics"
+              description: "Pod {{ $labels.pod }} is scheduled but its metrics port has not answered for 2 minutes."
+
+          - alert: AllTargetsVanished
+            # Every target gone means discovery itself broke - the RBAC was
+            # revoked, or the annotation/port-name contract changed - rather
+            # than a service being down. Distinct failure, distinct fix.
+            # 10m because a cluster restart legitimately empties this.
+            expr: absent(up{job="agents"})
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Prometheus is scraping nothing"
+              description: "No target matched job=agents for 10 minutes. Kubernetes service discovery or the metrics port naming is broken, not a single agent."
+
+      # ------------------------------------------------------------------
+      # Is it able to do the work
+      # ------------------------------------------------------------------
+      - name: capacity
+        rules:
+          - alert: RunsBeingTurnedAway
+            # Threshold is 0 because metrics.py already says what this counter
+            # means: "a rising rejection count means the queue cap is being hit
+            # and people are being turned away". MAX_QUEUED_RUNS is 4 on top of
+            # MAX_CONCURRENT_RUNS of 1, so a rejection is not backpressure
+            # working - it is a request refused outright.
+            expr: increase(orchestrator_runs_total{outcome="rejected"}[15m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: "Requests are being refused"
+              description: "{{ $value | printf \"%.0f\" }} run(s) were rejected in the last 15m because the queue was full. Concurrency is capped at 1 with 4 queued by design; sustained rejections mean the cap is too low for the load."
+
+          - alert: DiscoveryReachedNoAgents
+            # Also 0, and for a stronger reason. Discovery is best-effort by
+            # design: an unreachable agent is logged and the run proceeds with
+            # a partial toolset. Reaching NO agent is the one case that
+            # tolerance cannot absorb, because the run then has zero tools -
+            # which is exactly the answering-from-nothing failure the reground
+            # guardrail exists to catch. It should never happen quietly.
+            expr: increase(orchestrator_discovery_failures_total[15m]) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: "Orchestrator discovered no agents"
+              description: "Discovery reached zero agents in the last 15m. Runs in that state have no tools at all."
+
+          - alert: RunsSlowerThanDesigned
+            # 300s is not a guess: it is the last finite bucket of
+            # orchestrator_run_duration_seconds, chosen when that histogram was
+            # defined as the point past which a run is off the scale the design
+            # anticipated. A p95 there means most of the distribution has
+            # moved, not that one run was slow. Long window because runs are
+            # infrequent and a 5m rate would be mostly noise.
+            #
+            # >= 300, NOT > 300, and this was written the wrong way first.
+            # histogram_quantile cannot return more than the highest finite
+            # bucket bound: once the quantile falls in the +Inf bucket it
+            # reports that bound and stops. With every run taking an hour this
+            # expression still returns exactly 300, so `> 300` was an alert
+            # that could never fire under any circumstance. Verified with
+            # promtool rather than reasoned about - it returned 3E+02 for a
+            # series with all its mass above 300 - and tests/alerts_test.yml
+            # now pins that case.
+            expr: histogram_quantile(0.95, sum by (le) (rate(orchestrator_run_duration_seconds_bucket[30m]))) >= 300
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Runs are taking longer than the histogram was built for"
+              description: "p95 run duration has reached the 300s top bucket, so the real value is 300s or more. Check whether the model was evicted from GPU memory - OLLAMA_KEEP_ALIVE is 2m, and a cold reload costs far more than an inference."
+
+      # ------------------------------------------------------------------
+      # Is what it produces trustworthy
+      # ------------------------------------------------------------------
+      - name: grounding
+        rules:
+          - alert: MostRunsAnsweredFromNothing
+            # A reground firing is the guardrail WORKING, so alerting on one
+            # would punish the fix. What is abnormal is the proportion. The
+            # ratio is bounded at 1 because MAX_REGROUNDS is 1 - a run can
+            # reground at most once - so > 0.5 reads directly as "most runs
+            # tried to answer with every tool empty". No calibration needed for
+            # that to be worth looking at.
+            expr: >-
+              sum(rate(orchestrator_regrounds_total[30m]))
+              / sum(rate(orchestrator_runs_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Most runs are answering from empty evidence"
+              description: "Over half of recent runs called tools, got nothing back, and answered anyway before being sent back. That is the shape of every fabrication this project has recorded - check the corpus and the search path rather than the prompt."
+
+          - alert: MostRunsNarratedToolCalls
+            # Same bound and same reasoning: MAX_NUDGES is 1. metrics.py states
+            # the intent outright - "a rising line here is evidence that a
+            # prompt change made things worse" - so this is that sentence as a
+            # rule.
+            expr: >-
+              sum(rate(orchestrator_nudges_total[30m]))
+              / sum(rate(orchestrator_runs_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Most runs describe a tool call instead of making one"
+              description: "Over half of recent runs had to be re-prompted because the model narrated a tool call. If a prompt or model changed recently, this is the regression."
+
+          - alert: ToolFailingOnMostCalls
+            # Per tool, not global: one broken tool among five is invisible in
+            # an aggregate. > 0.5 separates broken from flaky - a tool that
+            # errors on most calls is not intermittent. Recorded at the MCP
+            # boundary, so schema-invalid input counts as an error here, which
+            # is deliberate and documented in architecture.md.
+            expr: >-
+              sum by (tool_name) (rate(tool_calls_total{status="error"}[30m]))
+              / sum by (tool_name) (rate(tool_calls_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ $labels.tool_name }} is failing most calls"
+              description: "{{ $labels.tool_name }} returned an error on over half its calls in the last 30m."
+
+          - alert: SearchMostlyRateLimited
+            # The one known gap that is still open: ddgs scrapes HTML and
+            # throttles. The search path already spaces requests and retries
+            # once, so a rate_limited outcome reaching this counter means the
+            # retry did not save it. Majority again - occasional throttling is
+            # expected and handled, most searches throttled is the tool being
+            # effectively unavailable while still reporting success.
+            expr: >-
+              sum(rate(search_outcomes_total{outcome="rate_limited"}[30m]))
+              / sum(rate(search_outcomes_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "DuckDuckGo is throttling most searches"
+              description: "Over half of recent searches were rate-limited after the built-in retry. Web results are effectively unavailable; answers will lean on the existing corpus without saying so."
 ---
 apiVersion: v1
 kind: Service
@@ -138,12 +337,21 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+            - name: rules
+              # A separate mount, not a second key in prometheus-config: a
+              # ConfigMap mounts as a directory, so mounting the config one at
+              # /etc/prometheus already fills that path. The rules need their
+              # own subdirectory for the glob above to match.
+              mountPath: /etc/prometheus/rules
             - name: data
               mountPath: /prometheus
       volumes:
         - name: config
           configMap:
             name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
         - name: data
           # emptyDir, not a PVC: metrics here are disposable. This is the
           # deliberate contrast with the retrieval agent, whose index is not.
