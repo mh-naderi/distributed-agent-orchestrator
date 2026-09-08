@@ -276,6 +276,92 @@ when it restarts:
 curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18080/stream
 ```
 
+## Reading the alerts
+
+Nine alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
+anyone** - there is no Alertmanager, so alerts exist in Prometheus' own UI and
+nowhere else. Port-forward it and open `/alerts`:
+
+```bash
+kubectl port-forward service/prometheus-service 19090:9090
+```
+
+Or ask without a browser, which is faster when checking whether anything is
+wrong at all:
+
+```bash
+kubectl exec deploy/prometheus -- wget -qO- http://localhost:9090/api/v1/alerts
+```
+
+An empty `alerts` array is the healthy answer. A firing alert carries the pod
+and agent it concerns, plus a description saying what to look at.
+
+To confirm the rules loaded at all - worth doing after any change to the
+ConfigMap, because a rules file that fails to parse stops Prometheus from
+starting, and one that is simply absent does not:
+
+```bash
+kubectl exec deploy/prometheus -- wget -qO- http://localhost:9090/api/v1/rules
+```
+
+Nine rules, each with `"health":"ok"`. `"health":"unknown"` immediately after a
+restart is normal - groups are evaluated on a stagger, so a group can sit
+unevaluated for up to one `evaluation_interval` (30s). If it is still unknown
+after a minute, something is wrong with that group.
+
+### What each one means when it fires
+
+| Alert | What it is telling you |
+| --- | --- |
+| `ScrapeTargetDown` | A pod is scheduled but its metrics port stopped answering. The service may still be serving MCP traffic fine. |
+| `AllTargetsVanished` | Discovery itself broke - RBAC, or the `metrics` port naming - rather than one agent being down. |
+| `RunsBeingTurnedAway` | The queue cap is being hit and requests are refused. Concurrency is 1 with 4 queued by design. |
+| `DiscoveryReachedNoAgents` | Runs are starting with no tools at all. This is the answering-from-nothing case; treat it as urgent. |
+| `RunsSlowerThanDesigned` | p95 has reached the 300s top bucket. Usually the model being evicted from GPU memory - `OLLAMA_KEEP_ALIVE` is 2m. |
+| `MostRunsAnsweredFromNothing` | Over half of runs answered from empty evidence before being sent back. Check the corpus and the search path, not the prompt. |
+| `MostRunsNarratedToolCalls` | Over half of runs described a tool call instead of making one. If a prompt or model changed recently, that is the regression. |
+| `ToolFailingOnMostCalls` | One named tool is erroring on most calls - broken rather than flaky. |
+| `SearchMostlyRateLimited` | DuckDuckGo is throttling past the built-in retry. Answers will lean on the existing corpus. |
+
+The two `MostRuns...` alerts need one caveat. Regrounds and nudges firing are
+the guardrails **working**; only the proportion is abnormal. A handful of them
+in a normal day is the system refusing to fabricate, and is not something to
+fix.
+
+### Changing a rule
+
+The rules are embedded in `k8s/prometheus.yaml`, so they deploy with everything
+else. After editing:
+
+```bash
+kubectl apply -f k8s/prometheus.yaml
+kubectl rollout restart deployment/prometheus
+```
+
+The restart is required. A mounted ConfigMap updates eventually, but Prometheus
+does not reload rules on its own.
+
+Then check the change the way it needs checking, which is not by reading it:
+
+```bash
+python tests/test_alert_rules.py alerts.yml
+cp tests/alerts_test.yml .
+docker run --rm -v "$PWD:/w" -w /w --entrypoint promtool prom/prometheus:v3.1.0 test rules alerts_test.yml
+```
+
+**A rule that loads healthy and sits at `inactive` looks identical to a correct
+rule on a healthy system.** One of these was written as `> 300` when
+`histogram_quantile` can never return more than 300, so it could not have fired
+under any circumstance - and it passed `promtool check rules`, reported
+`"health":"ok"`, and looked entirely normal. Only evaluating it against data
+that should trigger it found the problem. `pytest tests/test_alert_rules.py`
+enforces that every rule has such a case.
+
+One more trap, because it wasted a verification round here: **`promtool test
+rules` reports SUCCESS on an empty test file.** If a copy silently produced
+nothing, the result is a green tick that means "there was nothing to check".
+Check the byte count before believing a pass.
+
 ## Stopping and starting again
 
 Stop the cluster; do not delete it. `docker stop` keeps the PersistentVolume and

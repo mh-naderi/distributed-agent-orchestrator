@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Twenty-eight sections, most of them short. They are grouped here rather than
+Twenty-nine sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -46,6 +46,7 @@ system actually behaves rather than how it was meant to.
 worth as much as the ability to re-take them.
 
 - [The measurements are code now](#the-measurements-are-code-now)
+- [Decision: what the alert rules are allowed to assume](#decision-what-the-alert-rules-are-allowed-to-assume)
 - [The images are checked by reading, not by building](#the-images-are-checked-by-reading-not-by-building)
 - [One id per run, across four services](#one-id-per-run-across-four-services)
 - [Known gaps](#known-gaps)
@@ -514,6 +515,114 @@ attached to the choice it informs.
   not an absence" below.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
+
+## Decision: what the alert rules are allowed to assume
+
+Prometheus scraped every service and Grafana drew the result, and for a while
+that was described as observability. It was not. Nothing in the system said
+what counted as wrong. `/api/v1/rules` returned an empty list, so the whole
+arrangement worked exactly as long as a human happened to be looking at a
+dashboard, and no longer.
+
+Nine rules now sit in the `prometheus-rules` ConfigMap, in three groups: is the
+system there, can it do the work, is what it produces trustworthy.
+
+**There is no Alertmanager, and that is the honest limit.** Alertmanager routes
+alerts - to email, to Slack, to PagerDuty - and this project has none of those.
+Prometheus evaluates rules and shows what is firing at `/alerts` on its own.
+So the system can now say it is unwell; nobody is told. Those are different
+claims and only the first one is being made.
+
+### Where the thresholds came from
+
+This was the part that needed care. Prometheus keeps six hours of data in an
+`emptyDir`, deliberately - the contrast with the retrieval agent's volume is
+the point - so there is no history to fit thresholds against. It would have
+been easy to write `> 0.05` everywhere and produce nine rules that fire on
+nothing in particular, which is worse than no rules at all, because a rule that
+has never fired looks like coverage.
+
+Every threshold instead derives from something already fixed:
+
+- **Rejections** alert at more than zero, because `orchestrator/metrics.py`
+  already says what that counter means: a rising rejection count means the
+  queue cap is being hit and people are being turned away. With
+  `MAX_CONCURRENT_RUNS` at 1 and `MAX_QUEUED_RUNS` at 4, waiting is
+  backpressure working, and a rejection is a request refused outright.
+- **Discovery reaching no agents** also alerts at more than zero, for a
+  stronger reason. Discovery is best-effort by design: an unreachable agent is
+  logged and the run proceeds with a partial toolset. Reaching *no* agent is
+  the one case that tolerance cannot absorb, because the run then has zero
+  tools - which is the answering-from-nothing failure the reground guardrail
+  exists to catch.
+- **Run duration** uses the histogram's own top bucket, 300s, chosen when that
+  histogram was defined as the point past which a run is off the anticipated
+  scale.
+- Where no such anchor existed, the rule asks whether a failure is the
+  **majority** of what happened. "Most runs are doing this" needs no
+  calibration to be alarming, and both grounding ratios are bounded at 1
+  because `MAX_REGROUNDS` and `MAX_NUDGES` are 1.
+
+### Regrounds and nudges are not alerted on individually
+
+A reground firing means the guardrail worked. Alerting on each one would raise
+an alarm every time the system successfully refused to fabricate, and the
+obvious way to silence it would be to remove the guardrail. Only the proportion
+is abnormal: over half of recent runs having answered from empty evidence
+before being sent back says the corpus or the search path has degraded, not
+that the guardrail is doing its job.
+
+The tests encode that distinction directly. One reground in ten runs must
+produce no alert; nine in ten must.
+
+### An alert that could never fire
+
+`RunsSlowerThanDesigned` was written as `> 300` and would never have fired
+under any circumstance. `histogram_quantile` cannot return a value above the
+highest finite bucket bound: once the quantile falls in the `+Inf` bucket it
+reports that bound and stops. With every single run taking an hour, the
+expression still returns exactly 300.
+
+This was not reasoned out. The rule was written, a test was added asserting it
+fires, and promtool returned `3E+02` for a series whose mass was entirely above
+300. The rule is now `>= 300` and that case is pinned in
+`tests/alerts_test.yml`.
+
+It is worth being clear about how close this came to shipping. The rule loaded
+cleanly, `promtool check rules` passed it, Prometheus reported its health as
+`ok`, and it sat at `inactive` - which is exactly what a correct rule looks
+like on a healthy system. Nothing distinguishes a rule that is not firing from
+one that cannot fire, except evaluating it against data that should trigger it.
+
+### How they are checked
+
+Two layers, the same split as the image checks:
+
+- `tests/test_alert_rules.py` reads. Every metric an alert references must
+  resolve to a `Counter` or `Histogram` declared in this repo; every alert must
+  carry a severity and both annotations; the rules ConfigMap must actually be
+  mounted where `rule_files` points. A typo in a metric name is valid PromQL -
+  a selector matching no series - so without this a misspelled rule loads,
+  reports healthy, and never fires.
+- `tests/alerts_test.yml` evaluates, through `promtool test rules` in CI,
+  against the same Prometheus image the cluster runs.
+
+`test_every_alert_has_a_test_that_it_fires` ties the two together and earned
+its place immediately, by failing: two of the nine rules had no case asserting
+they fire, and writing one of them is what exposed the `>= 300` bug.
+
+The rules were then mutation-tested - a raised threshold, a comparison against
+the wrong value, a dropped grace period, a lost `by (tool_name)` - and all five
+breaks were caught. That check mattered more than it sounds: the first attempt
+at it reported success against a fixture that had transferred as zero bytes,
+because **`promtool test rules` reports SUCCESS on an empty test file**. CI now
+refuses to run if either file is empty.
+
+Finally, one rule was temporarily inverted against the live cluster to confirm
+the path end to end: it moved from `inactive` to `pending` to `firing`, with
+per-pod labels and annotations correctly templated, and returned to silence
+when restored. promtool proves the rules; only that proves the running server
+surfaces them.
 
 ## The images are checked by reading, not by building
 
