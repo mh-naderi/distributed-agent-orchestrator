@@ -1,0 +1,353 @@
+# Unit tests for the Prometheus alert rules, run by `promtool test rules`.
+#
+# NOT IN k8s/, and that is not a style preference: `kubectl apply -f k8s/` picks
+# up every .yml in that directory, and this file is a promtool fixture rather
+# than a Kubernetes resource. Left there it fails the deploy with
+#     error validating data: [apiVersion not set, kind not set]
+# after correctly applying everything else - the same trap kind-cluster.yaml
+# documents, for the same reason.
+#
+# The rules themselves live in the prometheus-rules ConfigMap in
+# k8s/prometheus.yaml, so they ship as one manifest. tests/test_alert_rules.py
+# extracts them to a temporary alerts.yml, which is the "alerts.yml" named
+# below.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A pod that is scheduled but not answering on its metrics port.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: a dead metrics port alerts, after the 2m grace
+    input_series:
+      - series: 'up{job="agents",agent="research-agent",pod="research-agent-abc"}'
+        values: "0x20"
+    alert_rule_test:
+      # Not yet: the rule has for: 2m, and a rolling update must not alert.
+      - eval_time: 1m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: agents
+              agent: research-agent
+              pod: research-agent-abc
+            exp_annotations:
+              summary: "research-agent is not serving metrics"
+              description: "Pod research-agent-abc is scheduled but its metrics port has not answered for 2 minutes."
+
+  - interval: 1m
+    name: a healthy target never alerts
+    input_series:
+      - series: 'up{job="agents",agent="research-agent",pod="research-agent-abc"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Discovery is allowed to degrade, but not to reach nothing.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: a single discovery failure is enough to alert
+    input_series:
+      - series: "orchestrator_discovery_failures_total"
+        values: "0 0 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DiscoveryReachedNoAgents
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Orchestrator discovered no agents"
+              description: "Discovery reached zero agents in the last 15m. Runs in that state have no tools at all."
+
+  # ------------------------------------------------------------------
+  # Rejections mean requests refused outright, not backpressure working.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: queued runs do not alert but rejected ones do
+    input_series:
+      # Runs that merely waited for a slot: the limiter doing its job.
+      - series: "orchestrator_runs_queued_total"
+        values: "0+5x20"
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RunsBeingTurnedAway
+        exp_alerts: []
+
+  - interval: 1m
+    name: a refused request alerts
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="rejected"}'
+        values: "0 0 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RunsBeingTurnedAway
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              outcome: rejected
+            exp_annotations:
+              summary: "Requests are being refused"
+              # "1", not "2": increase() over a counter that stepped 0->1 once
+              # extrapolates to the observed step, and the rule only needs it
+              # to be above zero. Pinned here so a future change to the
+              # formatting is a visible test failure rather than a silent one.
+              description: "1 run(s) were rejected in the last 15m because the queue was full. Concurrency is capped at 1 with 4 queued by design; sustained rejections mean the cap is too low for the load."
+
+  # ------------------------------------------------------------------
+  # The grounding guardrails. The negative case is the important one:
+  # a guardrail that fires occasionally is the system working, and an
+  # alert that punished that would be actively harmful.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: an occasional reground is the guardrail working, not an alert
+    input_series:
+      # One reground in every ten runs - roughly what a nine-case eval does.
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+10x60"
+      - series: "orchestrator_regrounds_total"
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsAnsweredFromNothing
+        exp_alerts: []
+
+  - interval: 1m
+    name: regrounding most runs alerts
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+10x60"
+      - series: "orchestrator_regrounds_total"
+        values: "0+9x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsAnsweredFromNothing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Most runs are answering from empty evidence"
+              description: "Over half of recent runs called tools, got nothing back, and answered anyway before being sent back. That is the shape of every fabrication this project has recorded - check the corpus and the search path rather than the prompt."
+
+  - interval: 1m
+    name: narrating most tool calls alerts
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+10x60"
+      - series: "orchestrator_nudges_total"
+        values: "0+9x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsNarratedToolCalls
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Most runs describe a tool call instead of making one"
+              description: "Over half of recent runs had to be re-prompted because the model narrated a tool call. If a prompt or model changed recently, this is the regression."
+
+  # ------------------------------------------------------------------
+  # Per-tool, because one broken tool among five vanishes in an average.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: one broken tool alerts without implicating the healthy ones
+    input_series:
+      - series: 'tool_calls_total{tool_name="retrieve",status="error"}'
+        values: "0+9x60"
+      - series: 'tool_calls_total{tool_name="retrieve",status="success"}'
+        values: "0+1x60"
+      # A busy, healthy tool that must stay out of it.
+      - series: 'tool_calls_total{tool_name="search_web",status="success"}'
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ToolFailingOnMostCalls
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tool_name: retrieve
+            exp_annotations:
+              summary: "retrieve is failing most calls"
+              description: "retrieve returned an error on over half its calls in the last 30m."
+
+  - interval: 1m
+    name: a flaky tool is not a broken one
+    input_series:
+      - series: 'tool_calls_total{tool_name="retrieve",status="error"}'
+        values: "0+2x60"
+      - series: 'tool_calls_total{tool_name="retrieve",status="success"}'
+        values: "0+8x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ToolFailingOnMostCalls
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The open known gap: ddgs throttling.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: occasional throttling is expected and handled
+    input_series:
+      - series: 'search_outcomes_total{outcome="rate_limited"}'
+        values: "0+1x60"
+      - series: 'search_outcomes_total{outcome="results"}'
+        values: "0+9x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: SearchMostlyRateLimited
+        exp_alerts: []
+
+  - interval: 1m
+    name: mostly throttled means web search is effectively gone
+    input_series:
+      - series: 'search_outcomes_total{outcome="rate_limited"}'
+        values: "0+9x60"
+      - series: 'search_outcomes_total{outcome="results"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: SearchMostlyRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "DuckDuckGo is throttling most searches"
+              description: "Over half of recent searches were rate-limited after the built-in retry. Web results are effectively unavailable; answers will lean on the existing corpus without saying so."
+
+  # ------------------------------------------------------------------
+  # Discovery itself breaking, as opposed to one agent being down.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: scraping nothing at all alerts, distinctly from a single pod dying
+    input_series:
+      # A target exists, but not one belonging to job=agents - which is what
+      # a broken relabel config or a revoked RBAC binding looks like.
+      - series: 'up{job="prometheus",pod="prometheus-1"}'
+        values: "1x30"
+    alert_rule_test:
+      # Not before the 10m grace: a cluster restart legitimately empties this.
+      - eval_time: 5m
+        alertname: AllTargetsVanished
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AllTargetsVanished
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: agents
+            exp_annotations:
+              summary: "Prometheus is scraping nothing"
+              description: "No target matched job=agents for 10 minutes. Kubernetes service discovery or the metrics port naming is broken, not a single agent."
+      # ...and it must stay quiet while agents are being scraped normally.
+      - eval_time: 15m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: healthy agent targets keep AllTargetsVanished quiet
+    input_series:
+      - series: 'up{job="agents",agent="orchestrator",pod="orchestrator-1"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AllTargetsVanished
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Run duration. The interesting case is the top bucket: histogram_quantile
+  # cannot report above the highest finite bound, so this pins the exact
+  # behaviour the rule's >= depends on.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: runs at or past the top bucket alert
+    input_series:
+      # Cumulative buckets, all mass above 300s: every finite bucket stays at
+      # zero and only +Inf climbs. histogram_quantile returns exactly 300 here,
+      # never more, which is why the rule uses >= and not >.
+      - series: 'orchestrator_run_duration_seconds_bucket{le="1"}'
+        values: "0x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="120"}'
+        values: "0x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="300"}'
+        values: "0x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="+Inf"}'
+        values: "0+10x60"
+    promql_expr_test:
+      # The finding itself, pinned: all mass above 300 still reports 300.
+      - expr: histogram_quantile(0.95, sum by (le) (rate(orchestrator_run_duration_seconds_bucket[30m])))
+        eval_time: 50m
+        exp_samples:
+          - labels: "{}"
+            value: 300
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: RunsSlowerThanDesigned
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Runs are taking longer than the histogram was built for"
+              description: "p95 run duration has reached the 300s top bucket, so the real value is 300s or more. Check whether the model was evicted from GPU memory - OLLAMA_KEEP_ALIVE is 2m, and a cold reload costs far more than an inference."
+
+  - interval: 1m
+    name: ordinary run durations do not alert
+    input_series:
+      # Everything inside 20s, which is what a healthy local run looks like.
+      - series: 'orchestrator_run_duration_seconds_bucket{le="1"}'
+        values: "0x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="20"}'
+        values: "0+10x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="300"}'
+        values: "0+10x60"
+      - series: 'orchestrator_run_duration_seconds_bucket{le="+Inf"}'
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: RunsSlowerThanDesigned
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # An idle cluster must be silent. Every ratio rule divides by a rate
+  # that is absent when nothing runs; this proves that produces no
+  # alert rather than a division-by-zero firing forever.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: an idle system fires nothing
+    input_series:
+      - series: 'up{job="agents",agent="orchestrator",pod="orchestrator-1"}'
+        values: "1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsAnsweredFromNothing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: MostRunsNarratedToolCalls
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: ToolFailingOnMostCalls
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: SearchMostlyRateLimited
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: RunsSlowerThanDesigned
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AllTargetsVanished
+        exp_alerts: []

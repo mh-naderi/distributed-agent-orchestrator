@@ -8,5 +8,7 @@ sqlite-vec>=0.1.9
 ddgs>=9.0
 pyflakes>=3.2  # the code-analysis agent's static checks
 
+pyyaml>=6.0        # tests/test_alert_rules.py parses the k8s manifests
+
 pytest>=8.0
 pytest-asyncio>=0.24
