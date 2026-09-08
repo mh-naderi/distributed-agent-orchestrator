@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Twenty-nine sections, most of them short. They are grouped here rather than
+Thirty sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -47,6 +47,7 @@ worth as much as the ability to re-take them.
 
 - [The measurements are code now](#the-measurements-are-code-now)
 - [Decision: what the alert rules are allowed to assume](#decision-what-the-alert-rules-are-allowed-to-assume)
+- [A recovery procedure that referred to itself](#a-recovery-procedure-that-referred-to-itself)
 - [The images are checked by reading, not by building](#the-images-are-checked-by-reading-not-by-building)
 - [One id per run, across four services](#one-id-per-run-across-four-services)
 - [Known gaps](#known-gaps)
@@ -623,6 +624,78 @@ the path end to end: it moved from `inactive` to `pending` to `firing`, with
 per-pod labels and annotations correctly templated, and returned to silence
 when restored. promtool proves the rules; only that proves the running server
 surfaces them.
+
+## A recovery procedure that referred to itself
+
+The corpus is the only state here that redeploying cannot rebuild, and the docs
+described restoring it in three places: the backfill note, the note saying
+`backfill_claims.py` can be re-run whenever a corpus is restored, and the
+disaster-recovery note explaining that a volume rescued with `docker cp`
+"restores into a fresh cluster with the same `kubectl exec` pipe used for any
+other backup".
+
+There was no such pipe. Every `kubectl exec -i ... python -` in the repo streams
+a *script* into the pod; none of them writes a database. Three recovery paths
+terminated in a step that had never been written or run, and the two snapshots
+sitting on the volume could not have been restored by any documented means.
+
+This is the same shape as the alert rule that could never fire, and it is worth
+naming as a category: **a procedure nobody has executed is a hypothesis.** Both
+were plausible, both were written down in good faith, and both were false in a
+way that reading could not reveal - one because a rule that cannot fire looks
+exactly like a rule that has not fired, the other because a cross-reference to a
+procedure looks exactly like a procedure.
+
+### What verification changed
+
+Neither of the two substantive design decisions in `restore_corpus.py` survived
+contact with the real system in its original form.
+
+**It refused a corpus predating the provenance split.** A backup from before
+`claimed_source` existed was rejected as malformed - which would have blocked
+precisely the recovery the runbook describes, since `store.py` adds that column
+on startup and `backfill_claims.py` exists to move the old labels across
+afterwards. Missing *migrated* columns now warn; only a corpus that cannot be
+read, or holds nothing, blocks. Found by restoring the real 170-document backup
+from 2026-09-03 rather than by thinking about it.
+
+**It described the wrong reason for restarting the pod.** The script said the
+agent holds the database open, keeps the old inode after the swap, and serves
+the stale corpus until restarted. `store.py` opens a connection per operation
+and closes it - deliberately, since FastMCP runs sync tools in a thread pool and
+a shared sqlite3 connection would eventually be used from the wrong thread.
+There is no long-lived handle and the data is live immediately, measured by
+swapping a 391-document corpus for a 170-document one and watching the running
+agent report 170.
+
+The restart is for the schema. `_create_schema` runs once, in `__init__`, so
+restoring a pre-split corpus leaves the agent running against a database with no
+`claimed_source` column: reads work, while `index_documents` and the corpus
+audit fail with `no such column`. Confirmed by running that query and watching
+it raise, then deleting the pod and watching the column appear.
+
+Both corrections make the guidance narrower and more useful. The first draft
+would have told an operator to restart every time, which is harmless but trains
+them to ignore the instruction on the one occasion it matters.
+
+### Why it verifies before it moves anything
+
+The failure to design against is not a missing backup. That announces itself.
+It is a restore that completes and replaces a working index with a broken one,
+because a transfer that stops partway still produces a file and SQLite opens the
+intact prefix without complaint.
+
+Cutting a 400-document corpus at 99% settled what the check had to be: it opens,
+reports 400 documents and 400 matching vectors, and passes every count-based
+test. Only `PRAGMA integrity_check` notices, so the check reads every page
+rather than trusting counts. Below about 90% the file fails to open at all, but
+the narrow band near the top is exactly where a real interrupted transfer lands.
+
+The whole path was then run end to end against the live corpus: a truncated file
+refused in `apply` mode with the corpus untouched at 391, a real restore down to
+170 and back, and a query afterwards that retrieved and then indexed - the
+second being the real check, since indexing writes `claimed_source` and fails
+loudly if the schema is wrong.
 
 ## The images are checked by reading, not by building
 

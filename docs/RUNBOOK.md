@@ -179,6 +179,86 @@ con = sqlite3.connect(db); con.enable_load_extension(True); sqlite_vec.load(con)
 con.execute('VACUUM INTO ?', (f'{db}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}',))"
 ```
 
+## Restoring a corpus
+
+The retrieval index is the only state in the system that cannot be rebuilt by
+redeploying. `docker stop` keeps it; `kind delete cluster` does not.
+
+Take a snapshot first - `VACUUM INTO` works while the agent is running, and
+writes a consistent image rather than whatever the page cache had flushed:
+
+```bash
+kubectl exec retrieval-agent-0 -- python -c "
+import sqlite3, os, sqlite_vec, datetime
+db = os.environ.get('RETRIEVAL_DB_PATH','/data/retrieval.db')
+con = sqlite3.connect(db); con.enable_load_extension(True); sqlite_vec.load(con)
+con.execute('VACUUM INTO ?', (f'{db}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}',))"
+```
+
+That snapshot lives on the same volume, which protects against a bad migration
+and not against losing the volume. To get a copy onto the host:
+
+```bash
+kubectl exec retrieval-agent-0 -- sh -c 'base64 -w0 /data/retrieval.db.bak-YYYYMMDD-HHMMSS' \
+  | base64 -d > corpus.db
+```
+
+### Putting one back
+
+```bash
+# 1. stream it in. base64 rather than a raw pipe: stdin crosses a Windows
+#    shell here, and one mangled byte gives a database that opens and is
+#    subtly wrong.
+base64 -w0 corpus.db | kubectl exec -i retrieval-agent-0 -- \
+    sh -c 'base64 -d > /data/retrieval.db.incoming'
+
+# 2. check it. Touches nothing, prints both sides so you can see what you
+#    are about to replace and with what.
+kubectl exec -i retrieval-agent-0 -- python - < agents/retrieval_agent/restore_corpus.py
+
+# 3. commit. Snapshots the current corpus first, then swaps.
+kubectl exec -i retrieval-agent-0 -- python - apply < agents/retrieval_agent/restore_corpus.py
+```
+
+Step 2 refuses anything it cannot vouch for - a truncated transfer, a file that
+is not a database, a corpus with no documents, or one whose vector count does
+not match its document count - and says so without touching the live corpus.
+A rejected file is left in place to look at.
+
+### Whether to restart the pod
+
+Usually not. The agent opens a SQLite connection per operation and closes it,
+so a restored corpus is live immediately. An earlier version of this runbook
+would have told you otherwise.
+
+The exception is a corpus old enough to need a schema migration, which step 2
+reports as a `NOTE`. `_create_schema` runs once when the agent starts, so until
+it does, the agent is running against a database missing `claimed_source`:
+reads work, and `index_documents` and the corpus audit fail with `no such
+column`. In that case only:
+
+```bash
+kubectl delete pod retrieval-agent-0
+kubectl exec -i retrieval-agent-0 -- python - < agents/retrieval_agent/backfill_claims.py
+kubectl exec -i retrieval-agent-0 -- python - < agents/retrieval_agent/backfill_claims.py apply
+```
+
+Restarting the pod kills any `kubectl port-forward` to it, so restart the
+retrieval forward afterwards.
+
+### Checking it worked
+
+Row counts are not proof. Ask the system to use the corpus:
+
+```bash
+curl -s -N "http://127.0.0.1:18080/stream?task=Search+the+indexed+documents+for+X"
+```
+
+A restore that produced a working index will `retrieve`, and - if the query
+leads to indexing - `index_documents` will succeed. That second one is the real
+check, because it writes `claimed_source` and fails loudly if the schema is
+wrong.
+
 ## Following one run across the services
 
 Every run gets an eight-character id, logged by the orchestrator and by every
@@ -444,8 +524,11 @@ This has hit the project twice with different ports:
 
   The retrieval index is at
   `data/rescue/local-path-provisioner/pvc-*_default_index-retrieval-agent-0/retrieval.db`
-  and restores into a fresh cluster with the same `kubectl exec` pipe used for
-  any other backup.
+  and goes back into a fresh cluster with the procedure in "Restoring a corpus"
+  above. That procedure did not exist when this note was first written - it
+  referred to "the same `kubectl exec` pipe used for any other backup", and
+  there was no such pipe. Every `kubectl exec -i ... python -` here streams a
+  script in; none of them wrote a database.
 
 Check the current ranges:
 
