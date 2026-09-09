@@ -525,8 +525,9 @@ what counted as wrong. `/api/v1/rules` returned an empty list, so the whole
 arrangement worked exactly as long as a human happened to be looking at a
 dashboard, and no longer.
 
-Nine rules now sit in the `prometheus-rules` ConfigMap, in three groups: is the
-system there, can it do the work, is what it produces trustworthy.
+Twelve rules now sit in the `prometheus-rules` ConfigMap, in three groups: is
+the system there, can it do the work, is what it produces trustworthy. Nine
+shipped first and covered one run outcome in six; see below.
 
 **There is no Alertmanager, and that is the honest limit.** Alertmanager routes
 alerts - to email, to Slack, to PagerDuty - and this project has none of those.
@@ -594,6 +595,68 @@ cleanly, `promtool check rules` passed it, Prometheus reported its health as
 `ok`, and it sat at `inactive` - which is exactly what a correct rule looks
 like on a healthy system. Nothing distinguishes a rule that is not firing from
 one that cannot fire, except evaluating it against data that should trigger it.
+
+### The rules covered one outcome in six
+
+Shipped, the nine rules watched exactly one of the six values
+`orchestrator_runs_total` can carry. `failed`, `truncated` and `unanswered` had
+nothing at all, and `no_tools` was covered only by accident.
+
+It was found the honest way rather than by review. Ollama died mid-session the
+following day, every run came back `ConnectionError`, the counter recorded each
+one correctly - and nothing fired. The instrumentation was right; the thing
+reading it was not looking.
+
+This is the third instance of the same shape in a week, and the pattern is now
+explicit enough to state: **a rule that has never fired and a rule that cannot
+fire are indistinguishable from the outside.** An alert that could never fire,
+a recovery procedure that referred to itself, and now a set of rules that simply
+did not mention most of the ways a run can end. None was visible by reading; all
+three were found by asking the running system.
+
+So the fix is not only three more rules. `test_every_run_outcome_is_alerted_or_exempt`
+reads the outcomes out of `api.py` and requires each one to be either selected
+by a rule or listed as deliberately exempt with a reason. A missing rule is now
+a test failure rather than a silence.
+
+It reads the code and not the comment in `metrics.py` that lists the outcomes,
+because that comment was itself wrong - it omitted `unanswered` - and the rules
+written against it inherited the omission. A list maintained by hand next to the
+thing it describes will drift from it; the only question is whether anything
+notices.
+
+### Two outcomes are deliberately not alerted
+
+`answered` is the run working. `unanswered` is the loop ending by saying it
+could not answer, which is the honest path this project spent weeks building.
+Alerting on it would raise an alarm every time the system correctly declined to
+invent something, and the obvious way to silence that alarm would be to remove
+the guardrail. Both are recorded in `EXEMPT_OUTCOMES` with the reasoning, so
+that being unalerted is a decision rather than an oversight - which is the whole
+distinction the coverage test exists to enforce.
+
+### Why the failure alert is a proportion
+
+`MostRunsFailing` looks like it should be a per-occurrence rule. A run that
+raised is never good, and `RunsBeingTurnedAway` fires on a single rejection for
+exactly that reasoning.
+
+The difference is what `failed` actually counts. It is `RunState`'s pessimistic
+default, so anything that escapes without setting an outcome lands there - and
+that includes a client disconnecting mid-run, because a generator's `finally`
+runs when it is closed. Closing the browser tab during a slow answer records a
+failure.
+
+That was measured rather than reasoned about: killing a `curl` three seconds
+into a run incremented `orchestrator_runs_total{outcome="failed"}`. A rule
+firing on any occurrence would therefore alert on somebody navigating away,
+which is ordinary use. A majority cannot be explained that way, and a dead model
+backend produces precisely that.
+
+The same measurement argues against "fixing" the conflation by splitting the
+label. A disconnect and an exception are both runs that ended without an answer,
+and the run that matters - did the user get one - is the same question in both
+cases.
 
 ### How they are checked
 

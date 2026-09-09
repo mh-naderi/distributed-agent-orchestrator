@@ -358,7 +358,7 @@ curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18
 
 ## Reading the alerts
 
-Nine alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
+Twelve alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
 anyone** - there is no Alertmanager, so alerts exist in Prometheus' own UI and
 nowhere else. Port-forward it and open `/alerts`:
 
@@ -402,11 +402,32 @@ after a minute, something is wrong with that group.
 | `MostRunsNarratedToolCalls` | Over half of runs described a tool call instead of making one. If a prompt or model changed recently, that is the regression. |
 | `ToolFailingOnMostCalls` | One named tool is erroring on most calls - broken rather than flaky. |
 | `SearchMostlyRateLimited` | DuckDuckGo is throttling past the built-in retry. Answers will lean on the existing corpus. |
+| `RunsStartedWithNoTools` | A run began with an empty tool list. Either discovery failed, or every agent is up and advertising nothing. Urgent. |
+| `MostRunsFailing` | Over half of runs ended in an unhandled failure. Usually the model backend: check `OLLAMA_HOST` against the port Ollama actually bound. |
+| `MostRunsTruncated` | Over half of runs ran out of iterations instead of answering. The loop is going round without converging. |
 
-The two `MostRuns...` alerts need one caveat. Regrounds and nudges firing are
-the guardrails **working**; only the proportion is abnormal. A handful of them
-in a normal day is the system refusing to fabricate, and is not something to
-fix.
+The `MostRuns...` alerts need one caveat, and it is the reason they are all
+proportions. Regrounds, nudges and truncations firing are the guardrails
+**working**; only the proportion is abnormal. A handful in a normal day is the
+system refusing to fabricate or to spin forever, and is not something to fix.
+
+`MostRunsFailing` is a proportion for a different reason. `failed` is the
+pessimistic default for any run that ends without setting an outcome, which
+includes **a client disconnecting mid-run** - closing the browser tab during a
+slow answer records a failure. Measured, not assumed: killing a `curl` three
+seconds into a run ticks the counter. So a handful of failures usually means
+somebody navigated away, and only a majority means the system is broken.
+
+If it does fire, the first thing to check is the model backend:
+
+```bash
+kubectl get deployment orchestrator -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OLLAMA_HOST")].value}'
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18434/api/tags
+```
+
+Ollama going down mid-session is what prompted these three rules - every run
+returned `ConnectionError` and nothing fired, because no rule referenced that
+outcome.
 
 ### Changing a rule
 
