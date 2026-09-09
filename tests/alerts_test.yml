@@ -400,6 +400,81 @@ tests:
               description: "Over half of recent runs ran out of iterations instead of answering. The loop is going round without converging; check whether a tool is returning something the model keeps re-querying."
 
   # ------------------------------------------------------------------
+  # The corpus. The negative cases matter most here: this is the only
+  # state with no source to rebuild it from, so a rule that cried wolf
+  # would get muted and then be absent on the day it mattered.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: an empty index alerts, after time to seed a fresh deploy
+    input_series:
+      - series: "retrieval_documents_total"
+        values: "0x30"
+    alert_rule_test:
+      # Not during a deploy-and-seed window.
+      - eval_time: 5m
+        alertname: CorpusIsEmpty
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CorpusIsEmpty
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "The retrieval corpus is empty"
+              description: "The index holds no documents, so every retrieve returns no evidence and answers will come from web search alone. On a fresh cluster this is expected until the corpus is seeded; otherwise something emptied a volume that has no other copy."
+      # A corpus that was always empty has not *lost* anything, so the collapse
+      # rule must stay quiet - 0 < 0.5 * 0 is false.
+      - eval_time: 20m
+        alertname: CorpusMostlyGone
+        exp_alerts: []
+
+  - interval: 1m
+    name: a healthy growing corpus alerts on neither rule
+    input_series:
+      - series: "retrieval_documents_total"
+        values: "350+1x90"
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: CorpusIsEmpty
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: CorpusMostlyGone
+        exp_alerts: []
+
+  - interval: 1m
+    name: losing most of the corpus alerts
+    input_series:
+      # 400 for an hour, then 100 - what a restore of a much older snapshot, or
+      # a lost volume, looks like.
+      - series: "retrieval_documents_total"
+        values: "400x60 100x40"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: CorpusMostlyGone
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "The retrieval corpus lost more than half its documents"
+              description: "The index is under half the size it recently was. If this was a restore or a purge, it is expected; if not, the volume has lost data and docs/RUNBOOK.md has the restore procedure."
+      # Still has documents, so it is not the empty case.
+      - eval_time: 90m
+        alertname: CorpusIsEmpty
+        exp_alerts: []
+
+  - interval: 1m
+    name: purging a handful of mislabelled documents is not a collapse
+    input_series:
+      # The real purge this project ran removed 34 documents from a corpus of
+      # several hundred. That must not look like data loss.
+      - series: "retrieval_documents_total"
+        values: "400x60 366x40"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: CorpusMostlyGone
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
   # An idle cluster must be silent. Every ratio rule divides by a rate
   # that is absent when nothing runs; this proves that produces no
   # alert rather than a division-by-zero firing forever.
@@ -439,4 +514,12 @@ tests:
         exp_alerts: []
       - eval_time: 50m
         alertname: MostRunsTruncated
+        exp_alerts: []
+      # No retrieval_documents_total series at all - a pod that has not
+      # reported yet. Absent is not zero, so neither corpus rule matches.
+      - eval_time: 50m
+        alertname: CorpusIsEmpty
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: CorpusMostlyGone
         exp_alerts: []

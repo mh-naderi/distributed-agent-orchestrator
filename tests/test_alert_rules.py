@@ -37,6 +37,16 @@ PROMQL_WORDS = {
     "sum", "rate", "increase", "absent", "histogram_quantile", "by", "without",
     "on", "ignoring", "group_left", "group_right", "and", "or", "unless",
     "avg", "min", "max", "count", "topk", "bottomk", "quantile",
+    # The _over_time family and friends. Added after CorpusMostlyGone was
+    # written with max_over_time and this check reported it as an undeclared
+    # metric - which is the guard working, but on the wrong target. A function
+    # missing from here fails loudly, so the list only needs to grow when a rule
+    # reaches for something new; it can never silently pass a real typo.
+    "max_over_time", "min_over_time", "avg_over_time", "sum_over_time",
+    "count_over_time", "last_over_time", "stddev_over_time", "quantile_over_time",
+    "delta", "idelta", "irate", "deriv", "predict_linear", "changes", "resets",
+    "clamp_max", "clamp_min", "abs", "ceil", "floor", "round", "vector",
+    "scalar", "time", "timestamp",
 }
 
 # Suffixes Prometheus derives from a histogram; the base name is what the code
@@ -361,6 +371,25 @@ def test_the_promtool_fixture_only_names_real_alerts():
         f"{PROMTOOL_TESTS.name} tests {sorted(unknown)}, which no rule defines. "
         "promtool passes such a case vacuously."
     )
+
+
+def test_a_promql_function_is_not_mistaken_for_a_metric():
+    """
+    CorpusMostlyGone uses max_over_time, and this check first reported that as
+    an undeclared metric. The fix was to name the function - which widens what
+    the check excuses, so this pins that the widening did not swallow the real
+    thing: the metric inside the call is still extracted.
+    """
+    expr = (
+        "retrieval_documents_total < 0.5 * "
+        "max_over_time(retrieval_documents_total[6h])"
+    )
+    assert metrics_in(expr) == {"retrieval_documents_total"}
+
+    # A typo inside a function call is still caught.
+    assert metrics_in("max_over_time(retrieval_documents_totl[6h])") == {
+        "retrieval_documents_totl"
+    }
 
 
 def test_the_metric_check_would_notice_a_typo():
