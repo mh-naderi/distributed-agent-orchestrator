@@ -358,7 +358,7 @@ curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18
 
 ## Reading the alerts
 
-Twelve alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
+Fourteen alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
 anyone** - there is no Alertmanager, so alerts exist in Prometheus' own UI and
 nowhere else. Port-forward it and open `/alerts`:
 
@@ -405,6 +405,8 @@ after a minute, something is wrong with that group.
 | `RunsStartedWithNoTools` | A run began with an empty tool list. Either discovery failed, or every agent is up and advertising nothing. Urgent. |
 | `MostRunsFailing` | Over half of runs ended in an unhandled failure. Usually the model backend: check `OLLAMA_HOST` against the port Ollama actually bound. |
 | `MostRunsTruncated` | Over half of runs ran out of iterations instead of answering. The loop is going round without converging. |
+| `CorpusIsEmpty` | The index holds nothing. Expected on a fresh cluster until seeded; otherwise a volume with no other copy has been emptied. |
+| `CorpusMostlyGone` | The index is under half its recent size. Expected right after a restore or a purge; otherwise data loss. |
 
 The `MostRuns...` alerts need one caveat, and it is the reason they are all
 proportions. Regrounds, nudges and truncations firing are the guardrails
@@ -428,6 +430,38 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18434/api/tags
 Ollama going down mid-session is what prompted these three rules - every run
 returned `ConnectionError` and nothing fired, because no rule referenced that
 outcome.
+
+### The two corpus alerts will fire when you meant it
+
+Both `Corpus...` rules fire on things you might have done on purpose, and that
+is deliberate. A fresh cluster's corpus really is empty. A restore to an older
+snapshot really did lose documents. Neither is a false alarm - the rule is
+describing the state correctly, and the operator who caused it is the one person
+who can say it was intended.
+
+They are not suppressed because the alternative is worse. This is the only state
+in the system with no source to rebuild it from, and it fails silently: an
+emptied index makes `retrieve` report no evidence, the model falls back to
+`search_web`, search succeeds, and answers keep arriving. No reground fires,
+because a reground needs *every* tool to have come back empty. Nothing else in
+these fourteen rules would notice.
+
+So if you have just restored or purged, expect them and move on. If you have
+not, check the volume before doing anything else:
+
+```bash
+kubectl exec retrieval-agent-0 -- python -c "
+import sqlite3
+con = sqlite3.connect('/data/retrieval.db')
+print('documents:', con.execute('select count(*) from documents').fetchone()[0])"
+kubectl exec retrieval-agent-0 -- sh -c 'ls -la /data/'
+```
+
+The `.bak-*` files on the volume are the nearest snapshots; "Restoring a corpus"
+above is how to put one back. `CorpusMostlyGone` compares against the highest
+value Prometheus has seen in six hours, which is all it retains, so after a
+Prometheus restart the baseline is whatever the corpus was at that point - the
+corpus-size panel on the dashboard is the longer memory.
 
 ### Changing a rule
 

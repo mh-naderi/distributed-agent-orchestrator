@@ -525,9 +525,10 @@ what counted as wrong. `/api/v1/rules` returned an empty list, so the whole
 arrangement worked exactly as long as a human happened to be looking at a
 dashboard, and no longer.
 
-Twelve rules now sit in the `prometheus-rules` ConfigMap, in three groups: is
-the system there, can it do the work, is what it produces trustworthy. Nine
-shipped first and covered one run outcome in six; see below.
+Fourteen rules now sit in the `prometheus-rules` ConfigMap, in four groups: is
+the system there, can it do the work, is the one irreplaceable thing still
+there, is what it produces trustworthy. Nine shipped first and covered one run
+outcome in six; see below.
 
 **There is no Alertmanager, and that is the honest limit.** Alertmanager routes
 alerts - to email, to Slack, to PagerDuty - and this project has none of those.
@@ -657,6 +658,59 @@ The same measurement argues against "fixing" the conflation by splitting the
 label. A disconnect and an exception are both runs that ended without an answer,
 and the run that matters - did the user get one - is the same question in both
 cases.
+
+### The failure that hides behind a working system
+
+Alerting on the corpus came last, and it is the one gap none of the earlier
+reasoning would have found, because the corpus failing does not look like a
+failure.
+
+Every other rule here watches something that stops working. An emptied index
+does not. `retrieve` reports no evidence - correctly, there is none - the model
+falls back to `search_web`, search succeeds, and answers keep arriving at the
+page. The reground guardrail does not fire, because it requires *every* tool
+that ran to have come back empty, and search did not. Run outcomes stay
+`answered`. Latency does not move. Nothing in the first twelve rules is
+sensitive to it at all.
+
+What makes that worse than an outage is that the corpus is the only state here
+with no source to rebuild it from. The agents are stateless and redeploy from
+their images; Prometheus keeps six disposable hours in an `emptyDir`. The index
+is a PersistentVolume holding documents accumulated since the first week, and
+losing it silently means losing it permanently.
+
+`CorpusIsEmpty` can be a bare `== 0` only because the gauge is not incremental.
+`server.py` sets it from `store.count()` at module load and again after each
+index, so it carries the true size from the moment the process starts - checked
+against the running agent, where the gauge, `SELECT COUNT(*)` and Prometheus all
+said 401. Had it only been set on indexing, zero would have meant "nothing
+indexed since this pod started" and the rule would have fired on every restart.
+
+`CorpusMostlyGone` leans on a property of the design rather than a tuned number:
+the corpus only grows in normal operation, because `index_documents` adds and
+nothing in the serving path deletes. Any sustained decrease is a maintenance
+script, a restore, or data loss.
+
+### An alert that fires when you meant it
+
+Both corpus rules will fire on deliberate acts - a fresh deploy, a restore to an
+older snapshot, a purge that removed enough. The first instinct is to suppress
+that, and it is wrong.
+
+Neither is a false alarm. The rule is describing the state accurately; what it
+cannot know is intent, and intent is the one thing the operator does know. The
+asymmetry decides it: somebody who has just run a restore can dismiss the alert
+in a second, while nobody can reconstruct a silent loss after the fact. On the
+live corpus the threshold computes to 200.5 documents, so the restore down to
+170 performed the day before would have fired it - which is precisely the event
+worth surfacing if it had been an accident rather than a test.
+
+The cost of getting this wrong in the other direction is a muted rule. An alert
+that fires on ordinary operations gets ignored, then silenced, and is then
+absent on the day it mattered. That is why the promtool cases spend most of
+their effort on the negative side: a corpus that was always empty has lost
+nothing, a growing corpus is fine, and the real purge this project ran - 34
+documents out of several hundred - must not read as data loss.
 
 ### How they are checked
 
