@@ -290,6 +290,73 @@ data:
               description: "Over half of recent runs ran out of iterations instead of answering. The loop is going round without converging; check whether a tool is returning something the model keeps re-querying."
 
       # ------------------------------------------------------------------
+      # Is the one thing that cannot be rebuilt still there
+      #
+      # Every other failure in this file is recoverable by redeploying. The
+      # corpus is not: it lives on a PersistentVolume and there is no source to
+      # regenerate it from. It also fails QUIETLY, which is why it needs its own
+      # rules rather than relying on the grounding ones. An emptied index makes
+      # `retrieve` report no evidence, the model falls back to `search_web`,
+      # search succeeds, and answers keep arriving - so no reground fires,
+      # because a reground needs EVERY tool to have come back empty. The system
+      # looks healthy while its memory is gone.
+      # ------------------------------------------------------------------
+      - name: data
+        rules:
+          - alert: CorpusIsEmpty
+            # == 0 is safe to alert on because the gauge is not incremental: it
+            # is set from store.count() at module load and again after every
+            # index, so it carries the true size from the moment the process
+            # starts. Zero means the index holds nothing, not that the metric
+            # has not been populated yet. Confirmed against the running agent -
+            # gauge 401, SELECT COUNT(*) 401.
+            #
+            # An absent series does not match this, so a pod that is still
+            # starting is silent rather than alarming.
+            #
+            # A FRESH DEPLOY WILL FIRE THIS, and that is left deliberately. A
+            # new cluster's corpus really is empty and retrieval really cannot
+            # answer from it until something is indexed; the alert is telling
+            # the truth. 10m is enough to deploy and seed without seeing it.
+            expr: retrieval_documents_total == 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "The retrieval corpus is empty"
+              description: "The index holds no documents, so every retrieve returns no evidence and answers will come from web search alone. On a fresh cluster this is expected until the corpus is seeded; otherwise something emptied a volume that has no other copy."
+
+          - alert: CorpusMostlyGone
+            # The corpus only grows in normal operation: index_documents adds,
+            # and nothing in the serving path deletes. So a decrease is always
+            # either a maintenance script, a restore, or data loss - and the
+            # first two are rare and deliberate. "More than half of it went" is
+            # the same majority reasoning the other proportion rules use, and
+            # needs no calibration to be alarming.
+            #
+            # A DELIBERATE RESTORE TO AN OLDER SNAPSHOT FIRES THIS. That is the
+            # intent, not a flaw: replacing 399 documents with 170 is precisely
+            # the thing worth noticing if nobody meant to do it. The operator
+            # who ran the restore can explain it; nobody can explain the other
+            # case after the fact.
+            #
+            # The baseline is bounded by retention. Prometheus keeps 6h in an
+            # emptyDir here, so max_over_time cannot look further back than
+            # that, and a Prometheus restart resets what it has seen - a
+            # collapse during that gap is compared against the new, lower peak
+            # and may not register. The corpus-size panel on the dashboard is
+            # the longer memory.
+            expr: >-
+              retrieval_documents_total
+              < 0.5 * max_over_time(retrieval_documents_total[6h])
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "The retrieval corpus lost more than half its documents"
+              description: "The index is under half the size it recently was. If this was a restore or a purge, it is expected; if not, the volume has lost data and docs/RUNBOOK.md has the restore procedure."
+
+      # ------------------------------------------------------------------
       # Is what it produces trustworthy
       # ------------------------------------------------------------------
       - name: grounding
