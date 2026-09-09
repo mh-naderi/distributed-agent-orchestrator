@@ -47,9 +47,17 @@ METRICS_PORT = int(os.environ.get("ORCHESTRATOR_METRICS_PORT", "9103"))
 
 # Outcome is a label rather than three counters so a dashboard can show the
 # split without hardcoding which outcomes exist. Values: "answered",
-# "truncated" (hit the guardrail), "failed" (raised), "no_tools" (discovery
-# came back empty, so the run never started), "rejected" (refused because
-# too many runs were already queued).
+# "unanswered" (the loop ended saying it could not answer, which is the honest
+# path rather than a fault), "truncated" (hit the iteration guardrail),
+# "failed" (raised, OR the client disconnected mid-run - see RunState.outcome
+# for why those share a bucket), "no_tools" (discovery came back empty, so the
+# run never started), "rejected" (refused because too many runs were already
+# queued).
+#
+# This list is load-bearing: it is what somebody writing an alert rule reads to
+# decide what to cover. It omitted "unanswered" for a while, and the alert rules
+# written against it missed three outcomes as a result. tests/test_alert_rules.py
+# now checks the code rather than this comment, so the two cannot drift again.
 RUNS = Counter(
     "orchestrator_runs_total",
     "Orchestrator runs, by how they ended",
