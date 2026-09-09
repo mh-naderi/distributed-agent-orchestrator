@@ -43,6 +43,22 @@ PROMQL_WORDS = {
 # declares.
 DERIVED_SUFFIXES = ("_bucket", "_count", "_sum")
 
+API = ROOT / "orchestrator" / "api.py"
+
+# Run outcomes that deliberately have no alert, and why. Being in this map is a
+# decision; being absent from both this map and the rules is an oversight, and
+# test_every_run_outcome_is_alerted_or_exempt cannot tell the difference unless
+# the decision is written down.
+EXEMPT_OUTCOMES = {
+    "answered": "the run worked",
+    "unanswered": (
+        "the loop ended saying it could not answer. That is the honest path and "
+        "the thing this project spent weeks building; alerting on it would raise "
+        "an alarm every time the system correctly declined to invent something, "
+        "and the obvious way to silence it would be to remove the guardrail"
+    ),
+}
+
 
 def manifest_docs():
     return [d for d in yaml.safe_load_all(MANIFEST.read_text(encoding="utf-8")) if d]
@@ -138,6 +154,88 @@ def test_every_metric_an_alert_references_exists(group, rule):
         "Histogram or Gauge in this repo declares. The rule would load cleanly "
         "and never fire."
     )
+
+
+def run_outcomes() -> set[str]:
+    """
+    Every value orchestrator_runs_total can be labelled with.
+
+    Read from api.py rather than from the comment in metrics.py that lists
+    them, because that comment was wrong - it omitted "unanswered" - and alert
+    rules written against it missed three outcomes. The code is the only thing
+    that cannot drift from itself.
+
+    Catches both forms: the `run.outcome = "..."` assignments and RunState's
+    `outcome: str = "failed"` default, which is what an escaping exception or a
+    disconnected client is recorded as.
+    """
+    source = API.read_text(encoding="utf-8")
+    return set(re.findall(r'\boutcome\b[^=\n]*=\s*"([a-z_]+)"', source))
+
+
+def alerted_outcomes() -> set[str]:
+    """Outcomes some alert rule actually selects on."""
+    found = set()
+    for _, rule in alert_rules():
+        found.update(re.findall(r'outcome\s*=\s*"([a-z_]+)"', rule["expr"]))
+    return found
+
+
+def test_every_run_outcome_is_alerted_or_exempt():
+    """
+    The check that would have caught the hole this test was written for.
+
+    Nine rules shipped covering exactly one of the six run outcomes. The one
+    that bit us was `failed`: Ollama died mid-session on 2026-09-08, every run
+    returned ConnectionError, the counter recorded it correctly - and no rule
+    referenced it, so nothing fired. `truncated` and `no_tools` were missing
+    too.
+
+    Alerting cannot be complete by inspection, because a missing rule looks
+    exactly like a rule that has not fired. This makes the omission a test
+    failure instead.
+    """
+    outcomes = run_outcomes()
+    assert outcomes, "found no outcomes in api.py; the extractor is broken"
+
+    uncovered = outcomes - alerted_outcomes() - set(EXEMPT_OUTCOMES)
+
+    assert not uncovered, (
+        f"run outcome(s) {sorted(uncovered)} have no alert and are not listed in "
+        "EXEMPT_OUTCOMES. Either write a rule, or record why not - an outcome "
+        "nothing watches is invisible until somebody notices the system was "
+        "broken all along."
+    )
+
+
+def test_exemptions_name_real_outcomes():
+    """A renamed outcome leaves an exemption silently excusing nothing."""
+    stale = set(EXEMPT_OUTCOMES) - run_outcomes()
+    assert not stale, (
+        f"EXEMPT_OUTCOMES lists {sorted(stale)}, which api.py never sets"
+    )
+
+
+def test_exemptions_are_justified():
+    """An exemption with no reason is an oversight with better paperwork."""
+    for outcome, reason in EXEMPT_OUTCOMES.items():
+        assert len(reason.split()) >= 3, f"{outcome} is exempt with no real reason"
+
+
+def test_the_outcome_extractor_finds_what_is_there():
+    """
+    The guard needs a guard. If this regex quietly matched nothing, the coverage
+    check above would pass forever while covering nothing.
+    """
+    outcomes = run_outcomes()
+
+    # The pessimistic default, which is only reachable as a dataclass field.
+    assert "failed" in outcomes, "RunState's default outcome was not found"
+    # ...and an ordinary assignment.
+    assert "answered" in outcomes
+
+    # The label call itself must not be mistaken for an assignment.
+    assert "run" not in outcomes and "outcome" not in outcomes
 
 
 # ---------------------------------------------------------------------------

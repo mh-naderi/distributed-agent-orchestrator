@@ -320,6 +320,86 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
+  # Run outcomes. Nine rules once covered exactly one of the six, and the
+  # gap was only found after a real outage passed unnoticed.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    name: a run that started with no tools alerts
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="no_tools"}'
+        values: "0 0 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RunsStartedWithNoTools
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: no_tools
+            exp_annotations:
+              summary: "Runs are starting with no tools"
+              description: "A run began with an empty tool list in the last 15m. Either discovery failed, or every agent is reachable and advertising nothing."
+
+  - interval: 1m
+    name: a few abandoned runs are not an outage
+    input_series:
+      # `failed` is the pessimistic default, and a client closing the tab
+      # mid-answer lands here - measured, not assumed. Alerting per occurrence
+      # would fire every time somebody navigated away.
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+9x60"
+      - series: 'orchestrator_runs_total{outcome="failed"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: the backend being down alerts
+    input_series:
+      # What Ollama dying looks like: nothing succeeds.
+      - series: 'orchestrator_runs_total{outcome="failed"}'
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Most runs are failing outright"
+              description: "Over half of recent runs ended in an unhandled failure. Check that the model backend is reachable - OLLAMA_HOST must point at a port Ollama actually bound, and Windows redraws its reserved port ranges on boot."
+
+  - interval: 1m
+    name: the occasional long run is the guardrail working
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+9x60"
+      - series: 'orchestrator_runs_total{outcome="truncated"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsTruncated
+        exp_alerts: []
+
+  - interval: 1m
+    name: a loop that never converges alerts
+    input_series:
+      - series: 'orchestrator_runs_total{outcome="answered"}'
+        values: "0+1x60"
+      - series: 'orchestrator_runs_total{outcome="truncated"}'
+        values: "0+9x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MostRunsTruncated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Most runs are hitting the iteration cap"
+              description: "Over half of recent runs ran out of iterations instead of answering. The loop is going round without converging; check whether a tool is returning something the model keeps re-querying."
+
+  # ------------------------------------------------------------------
   # An idle cluster must be silent. Every ratio rule divides by a rate
   # that is absent when nothing runs; this proves that produces no
   # alert rather than a division-by-zero firing forever.
@@ -350,4 +430,13 @@ tests:
         exp_alerts: []
       - eval_time: 50m
         alertname: AllTargetsVanished
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: RunsStartedWithNoTools
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: MostRunsFailing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: MostRunsTruncated
         exp_alerts: []
