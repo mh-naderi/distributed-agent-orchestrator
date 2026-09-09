@@ -223,6 +223,72 @@ data:
               summary: "Runs are taking longer than the histogram was built for"
               description: "p95 run duration has reached the 300s top bucket, so the real value is 300s or more. Check whether the model was evicted from GPU memory - OLLAMA_KEEP_ALIVE is 2m, and a cold reload costs far more than an inference."
 
+          - alert: RunsStartedWithNoTools
+            # Per occurrence, for the same reason as rejections: a run with no
+            # tools is never something the user did. It is also the exact
+            # answering-from-nothing condition the reground guardrail exists to
+            # catch, arriving before the run even starts.
+            #
+            # This is deliberately on the OUTCOME rather than on
+            # orchestrator_discovery_failures_total, because there are two ways
+            # to reach no_tools and that counter only sees one of them.
+            # Discovery raising increments it; discovery succeeding and
+            # returning an empty tool list does not - every agent reachable and
+            # advertising nothing looks perfectly healthy to it. That second
+            # path had no alert at all until this rule.
+            #
+            # On the raising path this and DiscoveryReachedNoAgents both fire.
+            # That is intentional: one names the cause, the other the effect,
+            # and two alerts during a total outage is not the noise worth
+            # optimising away.
+            expr: increase(orchestrator_runs_total{outcome="no_tools"}[15m]) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: "Runs are starting with no tools"
+              description: "A run began with an empty tool list in the last 15m. Either discovery failed, or every agent is reachable and advertising nothing."
+
+          - alert: MostRunsFailing
+            # A proportion, NOT a per-occurrence rule, and the difference was
+            # measured rather than assumed. `failed` is RunState's pessimistic
+            # default: anything that escapes without setting an outcome lands
+            # here, and that includes a client disconnecting mid-run, because a
+            # generator's finally runs when it is closed. Closing a browser tab
+            # during a slow answer therefore records a failure. Verified by
+            # doing it - one killed curl, one increment.
+            #
+            # So `> 0` would alert on somebody navigating away, which is normal
+            # use. A majority cannot be explained that way. The observed
+            # instance is the model backend going down: Ollama died mid-session
+            # on 2026-09-08, every run returned ConnectionError, and nothing
+            # fired because no rule referenced this outcome at all.
+            expr: >-
+              sum(rate(orchestrator_runs_total{outcome="failed"}[30m]))
+              / sum(rate(orchestrator_runs_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Most runs are failing outright"
+              description: "Over half of recent runs ended in an unhandled failure. Check that the model backend is reachable - OLLAMA_HOST must point at a port Ollama actually bound, and Windows redraws its reserved port ranges on boot."
+
+          - alert: MostRunsTruncated
+            # Truncation means the run hit MAX_ITERATIONS, which is the loop
+            # guardrail working - so per-occurrence alerting would raise an
+            # alarm every time the system correctly refused to spin forever,
+            # and the obvious way to silence it would be to raise the cap. Same
+            # reasoning as the reground and nudge rules, and the same bound:
+            # the ratio cannot exceed 1.
+            expr: >-
+              sum(rate(orchestrator_runs_total{outcome="truncated"}[30m]))
+              / sum(rate(orchestrator_runs_total[30m])) > 0.5
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Most runs are hitting the iteration cap"
+              description: "Over half of recent runs ran out of iterations instead of answering. The loop is going round without converging; check whether a tool is returning something the model keeps re-querying."
+
       # ------------------------------------------------------------------
       # Is what it produces trustworthy
       # ------------------------------------------------------------------
