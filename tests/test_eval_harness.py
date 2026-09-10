@@ -698,3 +698,58 @@ def test_a_run_without_an_id_still_produces_a_result(monkeypatch):
 
     assert result["trace_id"] is None
     assert result["grounding"] == 5
+
+# ---------------------------------------------------------------------------
+# The table's summary lines carry their own denominator
+# ---------------------------------------------------------------------------
+# The ERROR rows are printed above the means, but a mean quoted on its own is
+# read as a mean over the suite. A run where most cases errored would otherwise
+# report a confident 5.0 with nothing in that line to say so.
+
+
+def _scored(case_id, grounding=5):
+    return {
+        "id": case_id,
+        "required_tools_called": True,
+        "keyword_match": True,
+        "grounding": grounding,
+        "completeness": grounding,
+        "relevance": grounding,
+        "iterations": 1,
+        "seconds": 1.0,
+        "tools_called": ["retrieve"],
+        "trace_id": "abc12345",
+    }
+
+
+def test_the_means_say_how_many_cases_they_cover(capsys):
+    results = [_scored("a"), _scored("b"), {"id": "c", "error": "ConnectionError: nope"}]
+    run_eval.print_table(results)
+
+    out = capsys.readouterr().out
+    assert "over 2 of 3 cases" in out
+    assert "1 of 3 case(s) ERRORED" in out
+    assert "c: ConnectionError" in out
+
+
+def test_a_clean_run_still_reports_every_case(capsys):
+    results = [_scored("a"), _scored("b")]
+    run_eval.print_table(results)
+
+    out = capsys.readouterr().out
+    assert "over 2 of 2 cases" in out
+    assert "ERRORED" not in out
+
+
+def test_a_suite_where_everything_errored_reports_no_result(capsys):
+    results = [
+        {"id": "a", "error": "ConnectionError: nope"},
+        {"id": "b", "error": "ConnectionError: nope"},
+    ]
+    run_eval.print_table(results)
+
+    out = capsys.readouterr().out
+    assert "NOTHING SCORED" in out
+    assert "no result here to quote" in out
+    # A mean over nothing must not be printed at all.
+    assert "mean grounding" not in out

@@ -347,11 +347,37 @@ def print_table(results: list[dict]) -> None:
             f"{','.join(r['tools_called']) or '-'}"
         )
 
+    # Every number below is over the cases that produced one, so each has to
+    # say how many that was. A mean printed bare is read as a mean over the
+    # suite, and a suite where most cases errored would otherwise report a
+    # confident 5.0 - the ERROR rows are above, but a summary line has to carry
+    # its own denominator or it will be quoted without them.
+    errored = [r for r in results if "error" in r]
     scored = [r for r in results if r.get("grounding") is not None]
-    if scored:
+
+    if errored:
         print()
+        print(
+            f"  {len(errored)} of {len(results)} case(s) ERRORED and are excluded "
+            "from every number below:"
+        )
+        for r in errored:
+            print(f"    - {r['id']}: {r['error'][:80]}")
+
+    if not scored:
+        print()
+        print(
+            f"  NOTHING SCORED - none of the {len(results)} case(s) produced a "
+            "judged answer.\n  There is no result here to quote."
+        )
+    else:
+        print()
+        over = f"(over {len(scored)} of {len(results)} cases)"
         for metric in ("grounding", "completeness", "relevance"):
-            print(f"  mean {metric}: {statistics.mean(r[metric] for r in scored):.1f} / 5")
+            print(
+                f"  mean {metric}: "
+                f"{statistics.mean(r[metric] for r in scored):.1f} / 5   {over}"
+            )
     forbidden = [
         (r["id"], phrase)
         for r in results
