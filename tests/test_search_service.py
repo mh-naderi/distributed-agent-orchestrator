@@ -69,6 +69,14 @@ def fake_search(monkeypatch):
     FakeDDGS.script = [ORGANIC]
     monkeypatch.setattr(research_server, "DDGS", FakeDDGS)
     monkeypatch.setattr(research_server.time, "sleep", lambda _seconds: None)
+    # The module-level search_service caches results, so the two tests that go
+    # through the tool rather than a fresh SearchService would otherwise see
+    # each other's. That collision is worth knowing about rather than only
+    # fixing: a successful query followed by a rate-limited one returns the
+    # cached success, which is correct - a transient throttle should not erase
+    # an answer already fetched - and is exactly why only real results are
+    # cached in the first place.
+    research_server.search_service._cache.clear()
     return FakeDDGS
 
 
@@ -408,3 +416,135 @@ def test_an_outcome_without_a_note_stores_what_it_shows(service, fake_search):
     outcome = service.run("q")
 
     assert outcome.to_store() == outcome.text
+
+# ---------------------------------------------------------------------------
+# The cache remembers evidence and nothing else
+# ---------------------------------------------------------------------------
+# The dangerous entry is not a stale result - the TTL bounds that - but a cached
+# FAILURE. ddgs throttles, the agent correctly says it could not look something
+# up, and if that were remembered then one passing rate limit would be served to
+# every run for the whole TTL, each told the web had nothing to say. So most of
+# what is checked here is what must NOT be kept.
+
+
+def test_a_repeated_query_is_not_fetched_twice(service, fake_search):
+    fake_search.script = [ORGANIC]
+
+    first = service.run("mcp adoption")
+    second = service.run("mcp adoption")
+
+    assert fake_search.calls == 1, "the second search went to the network"
+    assert second.text == first.text
+
+
+def test_a_different_query_is_still_fetched(service, fake_search):
+    fake_search.script = [ORGANIC]
+
+    service.run("mcp adoption")
+    service.run("something else entirely")
+
+    assert fake_search.calls == 2
+
+
+def test_a_rate_limit_is_never_cached(service, fake_search):
+    """
+    The one that matters. A throttle is a statement about a moment; caching it
+    would turn a passing failure into a sticky one, and every later run would be
+    told the lookup could not happen when it now can.
+    """
+    fake_search.script = [DDGSException("DuckDuckGo: 202 Ratelimit")]
+
+    with pytest.raises(SearchUnavailable):
+        service.run("q")
+    with pytest.raises(SearchUnavailable):
+        service.run("q")
+
+    # Both attempts reached the network rather than the second being served a
+    # remembered failure. (Two per call: the throttle retry.)
+    assert fake_search.calls == 4
+
+
+def test_a_recovered_search_is_not_shadowed_by_the_earlier_failure(service, fake_search):
+    """The point of not caching failures: recovery is visible immediately."""
+    fake_search.script = [DDGSException("DuckDuckGo: 202 Ratelimit")]
+    with pytest.raises(SearchUnavailable):
+        service.run("q")
+
+    fake_search.calls = 0
+    fake_search.script = [ORGANIC]
+
+    outcome = service.run("q")
+
+    assert outcome.indexable
+    assert "example.com" in outcome.text
+
+
+def test_an_empty_search_is_never_cached(service, fake_search):
+    """
+    "Nothing matched" is a fact about this wording at this moment. Remembering
+    it would keep answering a later, better-timed search with the old absence.
+    """
+    fake_search.script = [DDGSException("no results found")]
+
+    service.run("obscure phrase")
+    service.run("obscure phrase")
+
+    assert fake_search.calls == 2
+
+
+def test_an_all_sponsored_page_is_never_cached(service, fake_search):
+    """Which links are ads changes minute to minute; it is not a property of
+    the query."""
+    fake_search.script = [SPONSORED]
+
+    service.run("laptops")
+    service.run("laptops")
+
+    assert fake_search.calls == 2
+
+
+def test_results_carrying_a_coverage_note_are_still_cached(service, fake_search):
+    """
+    A note saying the results are not about the subject is commentary on real
+    results - the outcome is still evidence, and still worth keeping.
+    """
+    fake_search.script = [ORGANIC]
+
+    first = service.run("What did the Quazzlemint Foundation conclude?")
+    second = service.run("What did the Quazzlemint Foundation conclude?")
+
+    assert "Note: none of these results mention" in first.text
+    assert fake_search.calls == 1
+    assert second.text == first.text
+
+
+def test_the_cache_can_be_turned_off(fake_search):
+    """An experiment that wants live results every time must be able to say so."""
+    service = research_server.SearchService(
+        cache=research_server.SearchCache(ttl=0, max_entries=0)
+    )
+    fake_search.script = [ORGANIC]
+
+    service.run("q")
+    service.run("q")
+
+    assert fake_search.calls == 2
+
+
+def test_a_hit_and_a_miss_are_counted_separately(service, fake_search):
+    """
+    A cache that is not working looks exactly like one that is: both return
+    correct results. The counter is the only thing that tells them apart.
+    """
+    fake_search.script = [ORGANIC]
+
+    def lookups(result):
+        return research_server.SEARCH_CACHE.labels(result=result)._value.get() or 0.0
+
+    hits_before, misses_before = lookups("hit"), lookups("miss")
+
+    service.run("counted")
+    service.run("counted")
+
+    assert lookups("miss") == misses_before + 1
+    assert lookups("hit") == hits_before + 1
