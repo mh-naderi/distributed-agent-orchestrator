@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException, TimeoutException
+from cache import SearchCache
 from coverage import unmentioned_terms
 from indexer import index_results
 from instrumentation import InstrumentedMCP
@@ -50,6 +51,17 @@ RESULTS_INDEXED = Counter(
 # A rate limit and a genuinely empty search both used to look like one call;
 # only this counter distinguishes "we were throttled" from "nothing matched",
 # and the first is the one that should never reach an answer as a finding.
+# Hits and misses, because a cache that is not working looks exactly like a
+# cache that is working: both return correct results, one just pays for them.
+# Nothing alerts on this - a cold cache is not a fault, and the hit rate is a
+# property of the workload rather than of the system's health - but it is on the
+# dashboard, which is where "why did that run take so long" gets asked.
+SEARCH_CACHE = Counter(
+    "search_cache_total",
+    "Search cache lookups by result",
+    ["result"],  # hit | miss
+)
+
 SEARCH_OUTCOMES = Counter(
     "search_outcomes_total",
     "Web searches by outcome",
@@ -209,8 +221,9 @@ class SearchOutcome:
 
 
 class SearchService:
-    def __init__(self):
+    def __init__(self, cache: SearchCache | None = None):
         self._last_search_at = 0.0
+        self._cache = cache if cache is not None else SearchCache()
 
     def _throttle(self) -> None:
         """
@@ -251,6 +264,34 @@ class SearchService:
         raise last_error
 
     def run(self, query: str) -> SearchOutcome:
+        """
+        The cached search. `_search` is what it used to be, unchanged.
+
+        A hit replaces the network call and nothing else: the same SearchOutcome
+        comes back, and the caller indexes and counts it exactly as it would
+        have. That is why the cache sits here rather than in the tool adapter -
+        every behaviour downstream stays identical to an uncached run.
+        """
+        cached = self._cache.get(query)
+        if cached is not None:
+            SEARCH_CACHE.labels(result="hit").inc()
+            logger.info("search cache hit for %r", query)
+            return cached
+
+        SEARCH_CACHE.labels(result="miss").inc()
+        outcome = self._search(query)
+
+        # Only results are kept. Every other outcome - rate-limited, failed,
+        # nothing matched, all of it sponsored - describes a moment rather than
+        # the query, and caching one would make a passing failure stick for the
+        # whole TTL. `indexable` already draws that line for the corpus, so it
+        # draws it here too rather than a second predicate that could drift.
+        if outcome.indexable:
+            self._cache.put(query, outcome)
+
+        return outcome
+
+    def _search(self, query: str) -> SearchOutcome:
         try:
             results = self._fetch(query)
         except DDGSException as exc:
