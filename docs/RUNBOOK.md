@@ -259,6 +259,37 @@ leads to indexing - `index_documents` will succeed. That second one is the real
 check, because it writes `claimed_source` and fails loudly if the schema is
 wrong.
 
+## The search cache
+
+Repeated searches are served from memory for fifteen minutes, which is most of
+why an eval run is no longer a pile of fresh scrapes. Only real results are
+kept - a rate limit, a failure, an empty result and an all-sponsored page are
+all re-fetched every time, deliberately, so a passing failure never becomes a
+sticky one.
+
+Two replicas means two caches, so a repeated query is fetched once per pod.
+
+Check the hit rate:
+
+```bash
+kubectl exec deploy/research-agent -- python -c "
+import urllib.request
+for line in urllib.request.urlopen('http://localhost:9100/metrics').read().decode().splitlines():
+    if line.startswith('search_cache_total'): print(line)"
+```
+
+To take a measurement with no caching at all - which is what you want when the
+question is about search itself rather than about the loop:
+
+```bash
+kubectl set env deployment/research-agent SEARCH_CACHE_TTL=0
+```
+
+That restarts the pods, so restart the research port-forward afterwards. Put it
+back with `SEARCH_CACHE_TTL=900`, and remember that `kubectl apply -f k8s/`
+reverts it along with everything else set this way - the same trap as
+`OLLAMA_HOST`.
+
 ## Following one run across the services
 
 Every run gets an eight-character id, logged by the orchestrator and by every

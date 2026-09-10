@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Thirty-one sections, most of them short. They are grouped here rather than
+Thirty-two sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -36,6 +36,7 @@ system actually behaves rather than how it was meant to.
 - [Adding a tool is mechanically free and behaviourally not](#adding-a-tool-is-mechanically-free-and-behaviourally-not)
 - [The corpus learned to vouch for a fiction](#the-corpus-learned-to-vouch-for-a-fiction)
 - [Decision: a failed search is not an absence](#decision-a-failed-search-is-not-an-absence)
+- [Decision: the cache remembers evidence and nothing else](#decision-the-cache-remembers-evidence-and-nothing-else)
 - [Saying which results are not about what was asked](#saying-which-results-are-not-about-what-was-asked)
 - [The guardrail for answering from nothing](#the-guardrail-for-answering-from-nothing)
 - [When asking again does not work](#when-asking-again-does-not-work)
@@ -514,7 +515,12 @@ attached to the choice it informs.
 - `ddgs` scrapes HTML rather than calling a supported API, and rate-limits under
   rapid use; swapping in a keyed search API means changing `SearchService` only.
   The throttling itself is no longer silent - see "Decision: a failed search is
-  not an absence" below.
+  not an absence" below - and repeated queries no longer re-scrape, which is
+  where the throttling was worst: see "Decision: the cache remembers evidence and
+  nothing else". **Still open**, because the cache narrows the exposure rather
+  than removing it. A first search of anything is still a scrape, the cache is
+  per-pod across two replicas, and nothing here makes DuckDuckGo a supported
+  interface.
 - ~~A small local model will skip `index_documents`~~ - **resolved**, see
   "Decision: the producer indexes its own output" below.
 
@@ -887,6 +893,84 @@ definition. Passing it a count would have implied a check it does not need.
 Both fixes were mutation-tested by reverting each to its previous behaviour and
 confirming the new tests fail - which is the only way to know a test written
 after the fact would have caught the thing it describes.
+
+## Decision: the cache remembers evidence and nothing else
+
+`ddgs` scrapes HTML rather than calling a supported API, and throttles under
+rapid use. That is the open gap in "Known gaps", and it is felt hardest by the
+measurement tools: an eval run puts nine cases through the loop, and
+`eval/experiment.py repeat` puts one case through it eight times. The same few
+queries are asked over and over within a few minutes, and every repetition was a
+fresh scrape.
+
+Measured in the pod against real DuckDuckGo: **2.78s to fetch, 0.00s to serve
+the same query again**, byte-identical text.
+
+### The part that needed deciding
+
+Caching the successes is obvious. What to do with everything else is not, and it
+is where a search cache stops being a performance question.
+
+This agent produces five other outcomes: rate-limited, failed, nothing matched,
+every result was an advertisement, and results-with-a-coverage-note. Four of
+those are statements about **a moment**, not about the query. Remembering one
+would take a passing throttle and serve it to every later run for the whole TTL,
+each of them correctly told that the lookup could not happen - long after it
+could.
+
+That is not a hypothetical failure for this project. The corpus once held a
+message about a failed search, indexed as though it were a document, and a later
+`retrieve` returned it as evidence. Same mistake, different store.
+
+So: **cache evidence, never absence.** `SearchOutcome.indexable` already draws
+exactly that line for the corpus - it is what decides whether an outcome is
+worth storing - so the cache reuses it rather than growing a second predicate
+that could drift from the first. The results-with-a-note case is cached, because
+a note saying the results are not about the subject is commentary on real
+results; the outcome is still evidence. The two hard failures never reach the
+cache at all, because they raise.
+
+### It replaces the network call and nothing else
+
+The cache sits inside `SearchService.run`, not in the tool adapter. A hit
+returns the same `SearchOutcome` the fetch produced, and the tool goes on to
+index and count it exactly as it would have, so every behaviour downstream is
+identical to an uncached run.
+
+Indexing on a hit costs nothing worth avoiding: `store.index` filters texts
+against what the corpus already holds *before* embedding anything, so a repeat
+is a lookup and an early return rather than a round trip to the embedder. Making
+a hit take a different path through the rest of the tool would have bought
+nothing and given the cache a second way to change behaviour.
+
+### The TTL is sized to the workload, not to the web
+
+Fifteen minutes, and that is a judgement rather than a measurement - nothing
+here measures how fast search results change. It is sized to what the cache is
+*for*: one eval run and a set of repeats, which is minutes. Short enough that no
+answer is built on a result from a previous working session.
+
+`SEARCH_CACHE_TTL=0` turns it off. An experiment that wants live results every
+time has to be able to say so, or the cache silently changes what is being
+measured - which would be a strange way to repay a project organised around
+trustworthy measurement.
+
+### Two replicas, two caches
+
+`research-agent` runs two replicas, so a repeated query is fetched once per pod
+rather than once. Eight repeats cost two fetches instead of eight, not the one a
+shared cache would give.
+
+A shared cache needs somewhere to share it, and this project deliberately has no
+such place - the only stateful service is the retrieval agent, and putting a
+search cache in the vector store would confuse two different kinds of memory.
+The hit/miss counter is on the dashboard so the real rate is observable rather
+than assumed, which matters more than the missing third of it.
+
+Nothing alerts on the hit rate. A cold cache is not a fault, and the rate is a
+property of the workload rather than of the system's health - unlike every
+metric in the alerting rules, there is no value of it that means something is
+wrong.
 
 ## The images are checked by reading, not by building
 
