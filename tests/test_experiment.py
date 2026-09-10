@@ -79,3 +79,64 @@ def test_an_unknown_case_exits_rather_than_measuring_nothing():
     """A typo in --case must not produce a confident zero."""
     with pytest.raises(SystemExit):
         experiment._case("no-such-case")
+
+# ---------------------------------------------------------------------------
+# A measurement has to say what it is a measurement of
+# ---------------------------------------------------------------------------
+# Failed runs are dropped rather than counted, so the denominator shrinks
+# silently unless the report is told how many were asked for. This is the
+# project's own failure mode turning up in the instrument: a result that reads
+# as clean because nothing was measured.
+
+
+def test_a_summary_says_how_many_runs_were_lost(capsys):
+    """
+    Eight asked for, two completed. Printing "0/2" alone reads as a clean
+    result on a small sample rather than a measurement that mostly did not
+    happen.
+    """
+    runs = [
+        {"tools": ["retrieve"], "invented": [], "seconds": 1.0},
+        {"tools": ["retrieve"], "invented": [], "seconds": 1.0},
+    ]
+    experiment._report("case", runs, attempted=8)
+
+    out = capsys.readouterr().out
+    assert "0/2" in out
+    assert "6 of 8 runs failed" in out
+    assert "NOT counted" in out
+
+
+def test_a_summary_with_nothing_lost_stays_quiet(capsys):
+    """The caveat must not appear when every run completed."""
+    runs = [{"tools": ["retrieve"], "invented": [], "seconds": 1.0}] * 4
+    experiment._report("case", runs, attempted=4)
+
+    out = capsys.readouterr().out
+    assert "0/4" in out
+    assert "failed" not in out
+
+
+def test_every_run_failing_refuses_to_report_a_result(capsys):
+    """
+    The case that prompted this. Four repeats against a host where Ollama had
+    moved ports printed "fabricated 0/0" - which is not a result, but reads
+    like one.
+    """
+    experiment._report("case", [], attempted=4)
+
+    out = capsys.readouterr().out
+    assert "NOTHING MEASURED" in out
+    assert "all 4 run(s) failed" in out
+    # ...and it must not print a fraction that could be quoted.
+    assert "0/0" not in out
+
+
+def test_a_report_without_an_attempted_count_is_unchanged(capsys):
+    """ab() knows every run completed, because it does not catch errors."""
+    runs = [{"tools": ["search_web"], "invented": [], "seconds": None}] * 3
+    experiment._report("with note", runs)
+
+    out = capsys.readouterr().out
+    assert "0/3" in out
+    assert "failed" not in out and "NOTHING MEASURED" not in out

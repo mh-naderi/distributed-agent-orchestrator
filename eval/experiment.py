@@ -77,9 +77,36 @@ def summarise(runs: list[dict]) -> dict:
     }
 
 
-def _report(label: str, runs: list[dict]) -> None:
+def _report(label: str, runs: list[dict], attempted: int | None = None) -> None:
+    """
+    Print the summary, and say what it is a summary OF.
+
+    `attempted` is the number of runs asked for. It matters because failed runs
+    are dropped rather than counted, so without it the denominator silently
+    shrinks: eight runs where six could not reach Ollama reported "fabricated
+    0/2", which reads exactly like a clean result on a small sample rather than
+    a measurement that mostly did not happen.
+
+    That is the failure this whole project is organised around, appearing in the
+    instrument itself - and it is not hypothetical. Running four repeats against
+    a host where Ollama had moved ports printed "fabricated 0/0", four ERR lines
+    above it, and no other indication that nothing had been measured.
+    """
     summary = summarise(runs)
-    print(f"\n  -> {label}: fabricated {summary['fabricated']}/{summary['runs']}")
+    completed = summary["runs"]
+    lost = 0 if attempted is None else attempted - completed
+
+    if attempted is not None and completed == 0:
+        print(f"\n  -> {label}: NOTHING MEASURED - all {attempted} run(s) failed.")
+        print("     There is no result here to quote. See the ERR lines above.")
+        return
+
+    caveat = (
+        f"   ({lost} of {attempted} runs failed and are NOT counted below)"
+        if lost > 0
+        else ""
+    )
+    print(f"\n  -> {label}: fabricated {summary['fabricated']}/{completed}{caveat}")
     for path, count in summary["paths"].items():
         print(f"     {count}x {path}")
     if summary["median_seconds"] is not None:
@@ -123,7 +150,7 @@ def repeat(case_id: str, runs: int, use_judge: bool) -> list[dict]:
             f"  {flag} run {i}: {trace_id}{extra} {shown[:78]}".replace(chr(10), " ")
         )
 
-    _report(case_id, collected)
+    _report(case_id, collected, attempted=runs)
     return collected
 
 
