@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Thirty sections, most of them short. They are grouped here rather than
+Thirty-one sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -46,6 +46,7 @@ system actually behaves rather than how it was meant to.
 worth as much as the ability to re-take them.
 
 - [The measurements are code now](#the-measurements-are-code-now)
+- [The instrument had the bug it was built to find](#the-instrument-had-the-bug-it-was-built-to-find)
 - [Decision: what the alert rules are allowed to assume](#decision-what-the-alert-rules-are-allowed-to-assume)
 - [A recovery procedure that referred to itself](#a-recovery-procedure-that-referred-to-itself)
 - [The images are checked by reading, not by building](#the-images-are-checked-by-reading-not-by-building)
@@ -813,6 +814,79 @@ refused in `apply` mode with the corpus untouched at 391, a real restore down to
 170 and back, and a query afterwards that retrieved and then indexed - the
 second being the real check, since indexing writes `claimed_source` and fails
 loudly if the schema is wrong.
+
+## The instrument had the bug it was built to find
+
+`eval/experiment.py` prints a line like `fabricated 0/8`, and those fractions
+are what README.md quotes as the durable record - "0 fabrications in 8", "9 runs
+in 10 calling `retrieve`". The denominator was whatever survived.
+
+Failed runs were printed as `ERR` and then dropped. Eight runs where six could
+not reach the model reported `fabricated 0/2`: a clean result on a small sample,
+indistinguishable from a deliberate two-run measurement. Nothing in the summary
+said six were missing.
+
+It was found by hitting it rather than by reading. A repeat run against a host
+where Ollama had moved ports printed:
+
+```
+  ERR run 1: ConnectionError: Failed to connect to Ollama...
+  ERR run 2: ConnectionError: Failed to connect to Ollama...
+  ERR run 3: ConnectionError: Failed to connect to Ollama...
+  ERR run 4: ConnectionError: Failed to connect to Ollama...
+
+  -> arithmetic-uses-the-evaluator: fabricated 0/4
+```
+
+Four total failures and a bottom line that reads like success. The `ERR` rows
+are right there, so nothing was hidden - but the summary is the part that gets
+copied into a table, and it travelled without them.
+
+This is the fourth instance of one pattern in a week, and the first inside the
+measuring equipment. An alert rule that could never fire. A recovery procedure
+that referred to itself. A set of rules that ignored most ways a run can end.
+And now a harness that reports a confident number with no evidence behind it -
+which is precisely the failure the harness exists to detect in the system it
+measures.
+
+The common thread is worth naming: **absence and a clean result look identical
+unless something is counting.** A rule at `inactive`, a procedure nobody ran, an
+outcome no rule selects, a denominator with the failures removed. In each case
+the artefact was well-formed and said nothing false; it simply did not say the
+one thing that would have revealed it.
+
+### What changed
+
+`_report` now takes the number of runs asked for. When some are lost it names
+them in the same line as the fraction, so a quoted number carries its own
+caveat:
+
+```
+  -> case: fabricated 0/2   (6 of 8 runs failed and are NOT counted below)
+```
+
+When every run is lost it refuses to print a fraction at all, because `0/0` is
+not a result and there must be nothing there to copy:
+
+```
+  -> case: NOTHING MEASURED - all 4 run(s) failed.
+     There is no result here to quote. See the ERR lines above.
+```
+
+`eval/run_eval.py` had a milder version of the same thing. Errored cases print
+an `ERROR` row and are filtered out of the scoring, and the means below were
+computed over the survivors with no denominator - five failures out of nine
+still produced a confident `mean grounding: 5.0 / 5`. Each mean now carries
+`(over N of M cases)`, the excluded cases are tallied, and a suite where nothing
+scored says so rather than averaging an empty set.
+
+`ab()` was left alone deliberately. It does not catch errors, so a failure ends
+the run rather than shrinking it, and every run it reports on completed by
+definition. Passing it a count would have implied a check it does not need.
+
+Both fixes were mutation-tested by reverting each to its previous behaviour and
+confirming the new tests fail - which is the only way to know a test written
+after the fact would have caught the thing it describes.
 
 ## The images are checked by reading, not by building
 

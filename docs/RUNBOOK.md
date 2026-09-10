@@ -310,6 +310,23 @@ How often does something happen, through the whole loop:
 OLLAMA_HOST=http://localhost:11434 .venv/Scripts/python.exe -m eval.experiment repeat --case honest-ignorance --runs 8
 ```
 
+**Check the denominator before quoting the number.** Failed runs are not
+counted, so the summary says how many were lost:
+
+```
+  -> honest-ignorance: fabricated 0/2   (6 of 8 runs failed and are NOT counted below)
+```
+
+and refuses to print a fraction when none completed:
+
+```
+  -> honest-ignorance: NOTHING MEASURED - all 8 run(s) failed.
+```
+
+The usual cause of a whole run failing is the model backend, not the case: the
+harness runs on the host, so it needs `OLLAMA_HOST` pointing at the port Ollama
+actually bound, which is not always 11434 - see the port trap below.
+
 It reports which route the loop took as well as the count, and that matters: a
 change which stops the model calling `search_web` at all looks like a fabrication
 fix if only the totals are read.
