@@ -174,13 +174,21 @@ suite is green on a fresh checkout.
 
 Prometheus and Grafana deploy with everything else.
 
-![Grafana dashboard with thirteen panels: agent health, corpus size, tool call rate and p95 latency by tool, error rate, calls by agent, orchestrator run outcomes and iterations, nudged runs, and search outcomes by category](docs/images/grafana-dashboard.png)
+![Grafana dashboard with twenty panels: agent health, corpus size, tool call rate and p95 latency by tool, error rate, calls by agent, orchestrator run outcomes, iterations and duration, nudged and regrounded runs, search outcomes, search cache hit rate, results indexed by status, runs that waited for a slot, and runs that started short of tools](docs/images/grafana-dashboard.png)
 
 A real capture of the running stack, not a mock-up — the dashboard is
 provisioned from a ConfigMap, so this is what comes up on a fresh deploy. The
-window is thirty minutes and holds five runs driven through the deployed
+window is three hours and holds a handful of runs driven through the deployed
 orchestrator, which is why the tool and agent panels have shape rather than a
 single spike at the edge. `docs/RUNBOOK.md` has the command that regenerates it.
+
+**Seven of the fourteen metrics this system records reached no panel at all**
+until recently, including `orchestrator_regrounds_total` — the fabrication
+guardrail, which is the single signal the project is organised around. It was
+alerted on and charted nowhere, so `MostRunsAnsweredFromNothing` could fire with
+nothing to open. Instrumenting something is cheap and putting it on a surface is
+not, so metrics accumulate faster than places to look at them; a test now fails
+if a declared metric reaches neither the dashboard nor an alert rule.
 
 Two panels were corrected while taking this. "Documents in corpus" plotted one
 number per Prometheus series and so showed three different totals, all of them
