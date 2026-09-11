@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Thirty-two sections, most of them short. They are grouped here rather than
+Thirty-three sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -19,6 +19,7 @@ measured - what the pieces are and why they are separate.
 - [Observability](#observability)
 - [Decision: the producer indexes its own output](#decision-the-producer-indexes-its-own-output)
 - [Decision: tool metrics are recorded at the MCP boundary](#decision-tool-metrics-are-recorded-at-the-mcp-boundary)
+- [Decision: a health check that cannot fail the pod](#decision-a-health-check-that-cannot-fail-the-pod)
 
 **What was deliberately not built.** Absences are decisions too, and the
 reasoning for them is easier to lose than the reasoning for code.
@@ -971,6 +972,84 @@ Nothing alerts on the hit rate. A cold cache is not a fault, and the rate is a
 property of the workload rather than of the system's health - unlike every
 metric in the alerting rules, there is no value of it that means something is
 wrong.
+
+## Decision: a health check that cannot fail the pod
+
+`/health` reported `"status": "ok"` while Ollama was down and every run was
+coming back `ConnectionError`. What it listed was the model *name* and the agent
+*URLs* - configuration, not reachability. Nothing in it was a check. It was also
+the target of both the liveness and the readiness probe, and had no tests.
+
+Found by opening it during an outage rather than by reading it, which is the
+only way this kind of thing is ever found: an endpoint that always says `ok`
+looks exactly like an endpoint whose dependencies are fine.
+
+### The obvious repair is worse than the problem
+
+Making the endpoint fail when a dependency is down is the standard answer, and
+here it would have caused two separate outages of its own.
+
+The **liveness** probe restarts the container when it fails. Restarting the
+orchestrator does nothing whatsoever about an unreachable Ollama, so the pod
+would churn in a loop for the duration of an outage it cannot affect - turning a
+degraded system into an unavailable one.
+
+The **readiness** probe withdraws the pod from its Service. That removes the
+page which is *currently displaying the error message* to whoever is trying to
+find out what is wrong. The system's most useful behaviour during an Ollama
+outage is to keep serving the UI and say `ConnectionError: Failed to connect to
+Ollama`; a readiness failure replaces that with a 503 from the ingress and no
+explanation.
+
+So the endpoint answers **200 always**, and the bad news goes in the body.
+`status` becomes `degraded`, `backend.reachable` becomes `false`, and
+`backend.detail` carries the actual exception. A human or a script can read it;
+Kubernetes will not act on it.
+
+### Checking inline would have been the same mistake twice
+
+The second design that does not survive contact with the manifest is doing the
+check when `/health` is called.
+
+Both probes use the default `timeoutSeconds: 1`. A *refused* connection is
+instant, so an inline check looks harmless in testing - but the failure that
+actually happens is a **hang**, and then the check is on the critical path of
+every probe. Three slow responses in a row and liveness restarts the pod: the
+crash loop arrives by a different route.
+
+The result is refreshed on a background task polling every 10s instead, and
+`/health` reads the stored verdict. The endpoint is a dictionary lookup whatever
+the backend is doing. `asyncio.wait_for` bounds the poll itself, because without
+it the first hang would stop the loop permanently and the endpoint would report
+a stale verdict forever.
+
+### What is still not checked, and why
+
+The agents are deliberately not called, and that decision is older than this one
+and unchanged: a wedged research agent must not be able to affect the
+orchestrator, and the discovery block is the cheap substitute - what the last
+discovery *found* and how long ago, without touching anything now.
+
+The model backend is different in kind. Discovery degrading leaves a system that
+still answers with fewer tools; the backend being unreachable means no run can
+produce an answer at all. There is no partial version of it.
+
+`None` and `False` also stay distinct. A process that has not completed its
+first check reads as `starting`, because reporting an unchecked backend as
+unreachable would make every deploy look like an outage.
+
+### Verified by breaking it
+
+`ok` with the backend up, `degraded` carrying the real `ConnectionError` with it
+down, `ok` again on recovery - with **80 seconds of downtime, zero restarts,
+still 1/1 Ready, and both `/health` and the UI answering 200 throughout**. That
+last part is the claim worth making, because it is the one a plausible-looking
+implementation would have broken.
+
+The tests wedge for a bounded two seconds rather than an hour, and that came out
+of mutation testing reporting two cases as NOT CAUGHT. They were caught - by
+hanging. A suite that hangs says less than one that fails, and the first version
+of these tests would have wedged CI rather than failing it.
 
 ## The images are checked by reading, not by building
 

@@ -408,6 +408,47 @@ when it restarts:
 curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18080/stream
 ```
 
+## Is anything actually wrong
+
+`/health` answers this, and it answers **200 whatever it finds** - the status
+code is for Kubernetes, the body is for you:
+
+```bash
+curl -s http://127.0.0.1:18080/health
+```
+
+`"status"` is `ok`, `degraded`, or `starting`. The one that matters:
+
+```json
+"status": "degraded",
+"backend": {
+  "host": "http://host.docker.internal:18434",
+  "reachable": false,
+  "checked_seconds_ago": 5.0,
+  "detail": "ConnectionError: Failed to connect to Ollama..."
+}
+```
+
+That is the model backend being unreachable, which is the most common failure
+here by some distance - Ollama has died mid-session three times in a week, and
+Windows redraws its reserved port ranges on every boot. Fix it by checking which
+port Ollama actually bound against what the pods are configured with; see the
+port trap below.
+
+The pod will NOT restart while this is true, and that is deliberate. Restarting
+the orchestrator does nothing about Ollama, and a readiness failure would
+withdraw the page that is showing you the error. If you see the orchestrator
+restarting, the cause is something else.
+
+`backend.checked_seconds_ago` should stay under about 10. A number climbing past
+that means the background poller has stopped, which is a different fault from
+the backend being down.
+
+The agents are deliberately not contacted by this endpoint. `discovery.tools`
+tells you what the last discovery found and `discovery.age_seconds` how long ago
+- an age far past `ttl_seconds` just means nothing has run recently, not that
+anything is broken.
+
 ## Reading the alerts
 
 Fourteen alert rules ship in the `prometheus-rules` ConfigMap. **Nothing pages
