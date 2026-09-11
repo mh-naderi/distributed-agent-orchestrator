@@ -48,15 +48,27 @@ data:
       "uid": "agent-orchestrator",
       "timezone": "browser",
       "refresh": "10s",
-      "time": { "from": "now-1h", "to": "now" },
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
       "panels": [
         {
           "type": "stat",
           "id": 1,
           "title": "Agents up",
-          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "description": "Scrape targets currently answering, which is five: two research replicas plus retrieval, code-analysis and the orchestrator itself. It counts METRICS ports, not MCP ports - a pod can serve tools perfectly while its metrics endpoint is wedged, and the reverse. A target that vanishes entirely rather than dropping to zero means the pod is gone; ScrapeTargetDown covers the first case and AllTargetsVanished the second.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
           "targets": [
-            { "expr": "sum(up{job=\"agents\"})", "legendFormat": "up" }
+            {
+              "expr": "sum(up{job=\"agents\"})",
+              "legendFormat": "up"
+            }
           ]
         },
         {
@@ -64,36 +76,71 @@ data:
           "id": 2,
           "title": "Documents in corpus",
           "description": "A stateless agent's metrics are all flow. This one has a size - and it is the number that should survive a pod restart.",
-          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
           "targets": [
-            { "expr": "max(retrieval_documents_total)", "legendFormat": "documents" }
+            {
+              "expr": "max(retrieval_documents_total)",
+              "legendFormat": "documents"
+            }
           ]
         },
         {
           "type": "stat",
           "id": 3,
           "title": "Tool calls (total)",
-          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "description": "Every tool invocation since the agents last started, counted at the MCP boundary rather than inside each tool - so a call rejected for schema-invalid input is counted too, which is the point of recording it there. Cumulative, so it resets when a pod restarts.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
           "targets": [
-            { "expr": "sum(tool_calls_total)", "legendFormat": "calls" }
+            {
+              "expr": "sum(tool_calls_total)",
+              "legendFormat": "calls"
+            }
           ]
         },
         {
           "type": "stat",
           "id": 4,
           "title": "Errors (total)",
-          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "description": "Tool calls that raised, over the same period as the panel beside it. Zero during real traffic is a true statement worth drawing, which is why this shows zero rather than nothing when idle - unlike the share panels below, where an empty ratio is undefined rather than good news.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
           "targets": [
-            { "expr": "sum(tool_calls_total{status=\"error\"}) or vector(0)", "legendFormat": "errors" }
+            {
+              "expr": "sum(tool_calls_total{status=\"error\"}) or vector(0)",
+              "legendFormat": "errors"
+            }
           ]
         },
         {
           "type": "timeseries",
           "id": 5,
           "title": "Tool call rate by tool",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "description": "Which tools are actually being used, which is a routing question more than a load one. This project has twice found that adding an unrelated tool changed how the model routed to an existing one - cached-retrieval went from 5/5 retrieve to 6/6 search_web when evaluate_expression was added - so a shift here after a change to any tool description is a finding rather than noise.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 4
+          },
           "targets": [
-            { "expr": "sum by (tool_name) (rate(tool_calls_total[5m]))", "legendFormat": "{{tool_name}}" }
+            {
+              "expr": "sum by (tool_name) (rate(tool_calls_total[5m]))",
+              "legendFormat": "{{tool_name}}"
+            }
           ]
         },
         {
@@ -101,22 +148,59 @@ data:
           "id": 6,
           "title": "p95 tool latency by tool",
           "description": "Computed from the histogram - this is why tool_call_duration_seconds is a Histogram and not a Gauge.",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 4
+          },
           "targets": [
             {
               "expr": "histogram_quantile(0.95, sum by (le, tool_name) (rate(tool_call_duration_seconds_bucket[5m])))",
               "legendFormat": "{{tool_name}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          }
         },
         {
           "type": "timeseries",
           "id": 7,
           "title": "Error rate by tool",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "description": "Errors as a share of each tool's own calls, which is the comparison that matters: one tool failing every call is invisible in a total dominated by a healthy one. ToolFailingOnMostCalls alerts per tool above half for the same reason, and this is the panel to open when it fires.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 12
+          },
           "targets": [
-            { "expr": "sum by (tool_name) (rate(tool_calls_total{status=\"error\"}[5m])) or vector(0)", "legendFormat": "{{tool_name}}" }
+            {
+              "expr": "sum by (tool_name) (rate(tool_calls_total{status=\"error\"}[5m])) or vector(0)",
+              "legendFormat": "{{tool_name}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 12,
+          "title": "Calls by agent",
+          "description": "Per-agent attribution comes from the relabel rules in the Prometheus config, not from the agents themselves.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 12
+          },
+          "targets": [
+            {
+              "expr": "sum by (agent) (rate(tool_calls_total[5m]))",
+              "legendFormat": "{{agent}}"
+            }
           ]
         },
         {
@@ -124,9 +208,17 @@ data:
           "id": 8,
           "title": "Orchestrator runs by outcome",
           "description": "The agents report tool calls; only the orchestrator knows how a RUN ended. A rising truncated line means the loop is hitting its guardrail, which no per-tool metric shows - each call looks fine.",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 20
+          },
           "targets": [
-            { "expr": "sum by (outcome) (rate(orchestrator_runs_total[5m]))", "legendFormat": "{{outcome}}" }
+            {
+              "expr": "sum by (outcome) (rate(orchestrator_runs_total[5m]))",
+              "legendFormat": "{{outcome}}"
+            }
           ]
         },
         {
@@ -134,7 +226,12 @@ data:
           "id": 9,
           "title": "Iterations per run (p95)",
           "description": "How many reason/act cycles a run needs. Approaching MAX_ITERATIONS is the early warning that prompts or the model are degrading.",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 20
+          },
           "targets": [
             {
               "expr": "histogram_quantile(0.95, sum by (le) (rate(orchestrator_run_iterations_bucket[5m])))",
@@ -147,8 +244,20 @@ data:
           "id": 10,
           "title": "Runs nudged (share)",
           "description": "A SHARE rather than a count, because a raw nudge count says nothing without knowing how much traffic produced it - the same number means something different at 5 runs and at 500. This is the fraction of runs where the model described a tool call instead of making one, so it is comparable across traffic levels and is the number to watch when changing the system prompt or the model. Bounded to 0-1 because the loop nudges at most once per run. It shows nothing rather than zero when there is no traffic: with no runs the ratio is 0/0, which is undefined rather than good news - unlike the error panels, where zero errors during real traffic is a true statement worth drawing.",
-          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 28 },
-          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+          "gridPos": {
+            "h": 8,
+            "w": 16,
+            "x": 0,
+            "y": 28
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            },
+            "overrides": []
+          },
           "targets": [
             {
               "expr": "sum(rate(orchestrator_nudges_total[5m])) / sum(rate(orchestrator_runs_total[5m]))",
@@ -161,19 +270,60 @@ data:
           "id": 11,
           "title": "Nudged runs (total)",
           "description": "The cumulative count, which answers a question the share cannot: whether this has ever happened at all. A share of nothing and a share of zero look identical on a graph.",
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 28
+          },
           "targets": [
-            { "expr": "sum(orchestrator_nudges_total) or vector(0)", "legendFormat": "nudged" }
+            {
+              "expr": "sum(orchestrator_nudges_total) or vector(0)",
+              "legendFormat": "nudged"
+            }
           ]
         },
         {
           "type": "timeseries",
-          "id": 12,
-          "title": "Calls by agent",
-          "description": "Per-agent attribution comes from the relabel rules in the Prometheus config, not from the agents themselves.",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "id": 14,
+          "title": "Runs regrounded (share)",
+          "description": "The share of runs where every tool came back empty and the model answered anyway, so it was sent back to say so instead. This is the single most important line on this dashboard: it is the shape of every fabrication this project has recorded. Deliberately placed under the nudge panel because the two are siblings and describe different failures - a nudge means the model never called a tool, this means it called them, got nothing, and answered regardless. A share rather than a count for the reason the nudge panel gives, and bounded to 0-1 because a run regrounds at most once. Shows nothing rather than zero with no traffic, since the ratio is then 0/0. A reground firing is the guardrail WORKING; what is abnormal is the proportion, which is why MostRunsAnsweredFromNothing alerts only above half - and this is the panel to open when it does.",
+          "gridPos": {
+            "h": 8,
+            "w": 16,
+            "x": 0,
+            "y": 36
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            }
+          },
           "targets": [
-            { "expr": "sum by (agent) (rate(tool_calls_total[5m]))", "legendFormat": "{{agent}}" }
+            {
+              "expr": "sum(rate(orchestrator_regrounds_total[5m])) / sum(rate(orchestrator_runs_total[5m]))",
+              "legendFormat": "regrounded"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 15,
+          "title": "Regrounded runs (total)",
+          "description": "The cumulative count, which answers what the share cannot: whether this has ever happened at all. A share of nothing and a share of zero look identical on a graph.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 36
+          },
+          "targets": [
+            {
+              "expr": "sum(orchestrator_regrounds_total) or vector(0)",
+              "legendFormat": "regrounded"
+            }
           ]
         },
         {
@@ -181,9 +331,130 @@ data:
           "id": 13,
           "title": "Search outcomes (cumulative)",
           "description": "Why searches produced no usable results, which tool_calls_total cannot answer: a throttled search and a successful one are one call each. rate_limited and failed are transport problems and say nothing about what exists; no_results and only_sponsored are real answers about the query. Cumulative rather than a rate, because these are rare enough that a 5m window is usually empty - the question is whether it has ever happened. An empty panel means no searches yet, not zero failures. A line that DROPS means a research-agent replica restarted and its counter reset: this sums across replicas, so the total falls until the new pod catches up. Outcomes themselves never decrease.",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 44
+          },
           "targets": [
-            { "expr": "sum by (outcome) (search_outcomes_total)", "legendFormat": "{{outcome}}" }
+            {
+              "expr": "sum by (outcome) (search_outcomes_total)",
+              "legendFormat": "{{outcome}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 16,
+          "title": "Search cache hits (share)",
+          "description": "How often a search was answered from memory instead of scraping DuckDuckGo again. Nothing alerts on this and nothing should: a cold cache is not a fault, and the rate is a property of the workload rather than of the system's health - there is no value of it that means something is wrong. It is here because a cache that has quietly stopped working looks exactly like one that is working, since both return correct results; only this line tells them apart. Expect well under 100% even on repeated work: research-agent runs two replicas and the cache is per pod, so a repeated query is fetched once per pod rather than once. Only real results are cached, so a run full of rate limits shows misses however often it repeats.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 44
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(search_cache_total{result=\"hit\"}[5m])) / sum(rate(search_cache_total[5m]))",
+              "legendFormat": "hit rate"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 17,
+          "title": "Run duration (p95)",
+          "description": "Wall time for a whole run - one or more local LLM calls plus tool calls. THE LINE CANNOT GO ABOVE 300. histogram_quantile never returns more than the highest finite bucket bound, so once the quantile lands in the +Inf bucket it reports 300 and stays there however slow runs actually get. A flat line at 300 therefore means 'at least 300s', not 'exactly 300s' - which is why RunsSlowerThanDesigned alerts on >= 300 rather than > 300, an expression that could never have fired. The usual cause of a jump is the model being evicted from GPU memory: OLLAMA_KEEP_ALIVE is 2m, and a cold reload costs far more than an inference.",
+          "gridPos": {
+            "h": 8,
+            "w": 16,
+            "x": 0,
+            "y": 52
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(orchestrator_run_duration_seconds_bucket[5m])))",
+              "legendFormat": "p95 seconds"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "id": 18,
+          "title": "Runs that waited for a slot (total)",
+          "description": "Runs that had to wait before starting, because MAX_CONCURRENT_RUNS is 1 - two browser tabs must not share one 4GB GPU. Waiting is the limiter doing its job and is not a problem; being REFUSED is, and that is a different counter with its own alert. Compare this against the rejected slice of the runs-by-outcome panel: a rising queue with no rejections means the cap is holding, and rejections mean it is too low for the load.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 52
+          },
+          "targets": [
+            {
+              "expr": "sum(orchestrator_runs_queued_total) or vector(0)",
+              "legendFormat": "queued"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 19,
+          "title": "Search results indexed (by status)",
+          "description": "The producer indexing its own output, which is a decision rather than a detail: the model was asked to call index_documents after searching and reliably would not, because indexing pays off on the NEXT run and costs tokens on this one. So search_web does it. 'stored' is new documents, 'skipped' is text the corpus already held, and 'not_indexable' is an outcome that was never a document - a rate limit, a failure, an empty result, a page of advertisements. That last series should track the unhappy slices of the search-outcomes panel; if it climbs while those stay flat, something is treating real results as unstorable.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "targets": [
+            {
+              "expr": "sum by (status) (rate(search_results_indexed_total[5m]))",
+              "legendFormat": "{{status}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 20,
+          "title": "Runs that started short of tools",
+          "description": "Discovery passes that saw FEWER than the full set of five tools - search_web and index_documents from research, retrieve from retrieval, analyze_code and evaluate_expression from code-analysis. Zero is healthy. Anything above it means an agent was unreachable and runs went ahead without its tools.\n\nThis panel exists because orchestrator/metrics.py states the condition it was missing: discovery is best-effort by design - an unreachable agent is logged and the run proceeds with a partial toolset - and 'that tolerance is only safe if the degradation is visible somewhere'. It was visible nowhere. DiscoveryReachedNoAgents and RunsStartedWithNoTools both fire only on total failure, so losing one agent out of three showed up on no surface at all: runs kept succeeding, with fewer options and no record.\n\nA BUCKET COUNT RATHER THAN A QUANTILE, and the first draft got this wrong. histogram_quantile(0.1, ...) reported 4.1 while every run was seeing all five, because the quantile falls inside the (4, 5] bucket and is interpolated - so a healthy system drew a line that read as permanent degradation. The le=\"4.0\" bucket counts runs at four tools or fewer directly, and needs no interpolation to be true.\n\nNote the \"4.0\". The Python client writes histogram bounds as floats, so a selector written le=\"4\" matches no series at all - a query returning no data forever, which on a graph is indistinguishable from a healthy zero. That was the first version of this query, and it was caught by asking live Prometheus rather than by reading the expression.\n\nNothing alerts on it: a partial toolset is legitimate during a rolling restart, and the number that means trouble depends on how many agents are meant to be up.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 60
+          },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "decimals": 0
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(orchestrator_tools_discovered_bucket{le=\"4.0\"}[5m]))",
+              "legendFormat": "runs with 4 tools or fewer"
+            },
+            {
+              "expr": "sum(rate(orchestrator_tools_discovered_bucket{le=\"+Inf\"}[5m]))",
+              "legendFormat": "all discovery passes"
+            }
           ]
         }
       ]
