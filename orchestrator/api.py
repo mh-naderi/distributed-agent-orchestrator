@@ -39,12 +39,17 @@ from prometheus_client import start_http_server
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
+import ollama
+
 from orchestrator.config import (
     AGENT_URLS,
     MAX_CONCURRENT_RUNS,
     MAX_TASK_CHARS,
     MAX_QUEUED_RUNS,
+    HEALTH_PROBE_INTERVAL,
+    HEALTH_PROBE_TIMEOUT,
     MCP_DISCOVERY_TTL,
+    OLLAMA_HOST,
     OLLAMA_MODEL,
 )
 from orchestrator.graph import SYSTEM_PROMPT, build_graph
@@ -84,18 +89,104 @@ async def index(request):
     return FileResponse(STATIC / "index.html")
 
 
+class _BackendProbe:
+    """
+    Whether the model backend answered, the last time anything asked it.
+
+    WHY THIS IS POLLED RATHER THAN CHECKED ON DEMAND. /health said "ok" while
+    Ollama was down and every run was returning ConnectionError, because it
+    reported the model NAME and the agent URLS - configuration, not
+    reachability. Nothing in it was a check.
+
+    The obvious repair, checking the backend when /health is called, would have
+    been worse than the problem. Both probes in k8s/orchestrator.yaml use the
+    default timeoutSeconds of 1. A refused connection is instant, but the
+    failure that actually happens is a HANG, and an inline check would then
+    push /health past a second - failing liveness three times and restarting
+    the orchestrator, repeatedly, during an outage that restarting cannot fix.
+    Readiness would fail too, pulling the page that displays the error out of
+    service.
+
+    So the result is refreshed on a background task and /health reads it. The
+    endpoint stays a dictionary lookup whatever the backend is doing.
+    """
+
+    def __init__(self, interval: float = HEALTH_PROBE_INTERVAL,
+                 timeout: float = HEALTH_PROBE_TIMEOUT):
+        self._interval = interval
+        self._timeout = timeout
+        # None means "nobody has looked yet", which is different from False and
+        # has to stay different: reporting an unchecked backend as unreachable
+        # would make every start look like an outage.
+        self.reachable: bool | None = None
+        self.detail: str = "not checked yet"
+        self.checked_at: float | None = None
+
+    async def check_once(self) -> None:
+        client = ollama.AsyncClient(host=OLLAMA_HOST, timeout=self._timeout)
+        try:
+            # list() is /api/tags: metadata only. It does not load the model,
+            # so this never costs a cold start on a 4GB GPU.
+            await asyncio.wait_for(client.list(), timeout=self._timeout)
+            if self.reachable is False:
+                logger.info("model backend reachable again at %s", OLLAMA_HOST)
+            self.reachable, self.detail = True, "answered"
+        except Exception as exc:  # noqa: BLE001 - any failure means unreachable
+            if self.reachable is not False:
+                logger.warning("model backend unreachable at %s: %s", OLLAMA_HOST, exc)
+            self.reachable = False
+            self.detail = f"{type(exc).__name__}: {exc}"[:200]
+        finally:
+            self.checked_at = time.monotonic()
+
+    async def run_forever(self) -> None:
+        while True:
+            await self.check_once()
+            await asyncio.sleep(self._interval)
+
+    def snapshot(self) -> dict:
+        age = None if self.checked_at is None else round(
+            time.monotonic() - self.checked_at, 1
+        )
+        return {
+            "host": OLLAMA_HOST,
+            "reachable": self.reachable,
+            "checked_seconds_ago": age,
+            "detail": self.detail,
+        }
+
+
+_backend_probe = _BackendProbe()
+
+
 async def health(request):
-    """Liveness plus enough configuration to make a failed run diagnosable."""
-    # Deliberately does NOT call the agents: readiness must not cascade, or a
-    # wedged agent pulls the UI out of service when the other tools still
-    # work. The discovery figures are the cheap substitute - they say what the
-    # last discovery FOUND, and how long ago, without touching anything now.
+    """
+    What this process is, and whether the things it needs are answering.
+
+    ALWAYS HTTP 200, and that is deliberate rather than lazy. Both probes point
+    here, so a non-200 would restart the orchestrator on liveness and withdraw
+    the page on readiness - during an outage in a dependency, neither of which
+    restarting or hiding the UI would repair. The body carries the bad news
+    instead, where a human or a script can read it and Kubernetes will not act
+    on it.
+
+    Still deliberately does NOT call the agents. That decision predates this
+    and its reasoning is unchanged: a wedged agent must not be able to affect
+    the orchestrator, and the discovery figures below are the cheap substitute -
+    what the last discovery FOUND and how long ago, without touching anything
+    now. The model backend is different because there is no partial version of
+    it: unreachable means no run can produce an answer at all.
+    """
     age = _registry_cache.age
+    backend = _backend_probe.snapshot()
     return JSONResponse(
         {
-            "status": "ok",
+            "status": {True: "ok", False: "degraded", None: "starting"}[
+                backend["reachable"]
+            ],
             "model": OLLAMA_MODEL,
             "agents": AGENT_URLS,
+            "backend": backend,
             "discovery": {
                 "tools": len(_registry_cache.tools),
                 "age_seconds": None if age is None else round(age, 1),
@@ -532,7 +623,16 @@ async def _lifespan(app):
     """
     start_http_server(METRICS_PORT)
     logger.info("metrics listening on :%d", METRICS_PORT)
-    yield
+
+    # Started here rather than at import, for the same reason the metrics
+    # server is: importing this module - which the tests do - must not start
+    # background work or touch the network. A /health served without it simply
+    # reports the backend as not yet checked.
+    watcher = asyncio.create_task(_backend_probe.run_forever())
+    try:
+        yield
+    finally:
+        watcher.cancel()
 
 
 app = Starlette(

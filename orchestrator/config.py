@@ -65,6 +65,22 @@ MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "120"))
 # blip into an outage.
 MCP_DISCOVERY_TTL = float(os.environ.get("MCP_DISCOVERY_TTL", "60"))
 
+# How often /health re-checks whether the model backend is answering, and how
+# long it waits before calling it unreachable.
+#
+# The check runs on a background task rather than when /health is called, and
+# these numbers are why. Both Kubernetes probes are configured with
+# timeoutSeconds: 1, so a check performed inline would put the model backend on
+# the critical path of every probe - and the failure that matters is not a
+# refused connection, which is instant, but a HANGING one. Three slow responses
+# in a row fail the liveness probe and restart a process that was never the
+# problem, during an outage it cannot fix.
+#
+# Polling every 10s instead keeps /health a dictionary read, however badly the
+# backend is behaving. The 2s timeout is generous because nothing waits on it.
+HEALTH_PROBE_INTERVAL = float(os.environ.get("HEALTH_PROBE_INTERVAL", "10"))
+HEALTH_PROBE_TIMEOUT = float(os.environ.get("HEALTH_PROBE_TIMEOUT", "2"))
+
 # ---------------------------------------------------------------------------
 # Concurrency
 # ---------------------------------------------------------------------------
