@@ -324,14 +324,14 @@ Runs `eval/test_cases.json` through the full system and scores each result on
 automated signals (required tools called, keyword match) plus an LLM judge that
 grades the answer against the tool output it was actually given.
 
-Latest run — `qwen3:1.7b`, nine cases, 49 s summed across cases:
+Latest run — 2026-09-12, `qwen3:1.7b`, nine cases, 47 s summed across cases:
 
 | case | required tool | safe | grounding | completeness | relevance |
 |---|---|---|---|---|---|
-| mcp-adoption-summary | yes | yes | 5 | 5 | 5 |
+| mcp-adoption-summary | yes | yes | 4 | 5 | 5 |
 | cached-retrieval | yes | yes | 5 | 5 | 5 |
 | code-review-basic | yes | yes | 5 | 5 | 5 |
-| code-review-finds-a-real-bug | yes | yes | 3 | 5 | 5 |
+| code-review-finds-a-real-bug | yes | yes | 5 | 5 | 5 |
 | code-review-syntax-error | yes | yes | 5 | 5 | 5 |
 | honest-ignorance | **NO** | yes | 1 | 5 | 5 |
 | arithmetic-uses-the-evaluator | yes | yes | 5 | 5 | 5 |
@@ -339,27 +339,61 @@ Latest run — `qwen3:1.7b`, nine cases, 49 s summed across cases:
 | a-checkable-fact | yes | yes | 5 | 5 | 5 |
 
 **One run, and the suite is not deterministic** — a sampling model does not
-produce a fixed table, so the most recent run appears here whatever it says.
-Eight repeats of `honest-ignorance` immediately before this one called
-`retrieve` every time and answered honestly, 0 fabrications in 8; in the run
-above it called nothing at all and failed its required-tool check. Both are the
-same system on the same day. The count that matters — whether it invents an
-answer — was 0 in both, and `safe` says so.
+produce a fixed table, so the most recent run appears here whatever it says. It
+was the last of five full-suite runs taken the same afternoon; the other four
+differed only in `honest-ignorance`, which passed once, and in
+`code-review-finds-a-real-bug`, whose grounding dropped to 3 once.
 
-Measured since: over ten repeats, 0 fabrications and 9 runs in 10 calling
-`retrieve`, so the required-tool assertion fails about one run in ten. The two
-assertions on that case fail for different reasons, which is what makes a red row
-readable. `safe` failing means the model invented something. `required tool`
-failing means it declined without consulting anything - right answer, never
-looked up, and the nudge had already asked once.
+**Fabrication was 0 in all 25 runs of `honest-ignorance` where it was counted**
+— the five suite runs and both sets of ten repeats below. That is the count
+that matters, and it holds. (The five paired runs were checked for the
+required-tool assertion only, and are not part of that 25.)
 
-The assertion is kept despite the noise. It measures a real property of the
-system rather than of the harness, and dropping an inconvenient signal is how a
-suite starts reporting what its author wants to hear. That volatility is why the
-required-tool assertion is the weakest signal here and the fabrication count is
-the strongest. `python -m eval.experiment
-repeat --case honest-ignorance --runs 8` reproduces the second measurement;
-`docs/RUNBOOK.md` has the rest.
+### The failing row is caused by the case before it
+
+This table used to explain `honest-ignorance`'s red row as noise: over ten
+isolated repeats it failed its required-tool check about one run in ten. That
+number is right, and it was the wrong explanation. The row had failed in both
+published runs, which at a true one-in-ten rate is a one-in-a-hundred event, so it
+was measured rather than accepted:
+
+| context | failed required-tool check |
+|---|---|
+| repeated on its own | 1 of 10 |
+| repeated on its own, with the judge run between repeats | 1 of 10 |
+| inside the full suite | 4 of 5 |
+| run immediately after `code-review-syntax-error` | **4 of 5** |
+
+So the cause is the case that runs before it — in the suite, three
+code-review cases — and not the LLM judge, which was the first suspect because
+`run_eval` calls it after every case and `repeat` does not by default. Every
+failure took the same path: two iterations, no tools called, a tool call
+narrated instead of made, then an honest `unanswered`.
+
+**This means the cases are not independent.** A case's result depends on what
+ran before it, which is a property of the harness's ordering rather than of the
+case. Every other case was stable across all five suite runs, so the effect
+appears to concentrate where a 1.7B model's choice between answering and calling
+a tool is closest to a tipping point — but that is an observation from five
+runs, not a guarantee about the others.
+
+The mechanism is **not established**. Each run builds its request from scratch
+— same system prompt, same task, same tools — so the likeliest explanation
+is state the model server carries from one request to the next. That is a
+hypothesis, and it is written here as one.
+
+The assertion is still kept, and the suite has deliberately **not** been
+reordered. Moving `honest-ignorance` first would turn this row green and remove
+the evidence of the problem along with the symptom, which is how a suite starts
+reporting what its author wants to hear. The fabrication count remains the
+strongest signal here and the required-tool check the weakest — now for a
+reason that has a measured cause rather than a guessed one.
+
+`python -m eval.experiment repeat --case honest-ignorance --runs 10`
+reproduces the isolated measurement; `docs/RUNBOOK.md` has the rest. The harness
+runs on the host, so `OLLAMA_HOST` has to point at the port Ollama actually
+bound — run without it and the summary now says `NOTHING SCORED` rather than
+printing a table built from nothing.
 
 `safe` folds the three ways a case can produce a confidently wrong answer: a
 forbidden phrase, claims the evidence does not support, or claims about a
