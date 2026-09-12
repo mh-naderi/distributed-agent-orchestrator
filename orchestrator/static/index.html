@@ -27,10 +27,20 @@
   #runid      { font-size: .78rem; opacity: .6; margin-top: 1rem; font-family: ui-monospace, monospace; }
   #runid[hidden] { display: none; }
   .answer pre { font-size: .95rem; opacity: 1; }
+  /* Translucent rather than a solid light fill, so it reads under both halves
+     of color-scheme: light dark. */
+  #backend    { border-left: 3px solid #dc2626; background: #dc26261a; padding: .5rem .8rem; margin: 0 0 1rem; border-radius: 0 6px 6px 0; font-size: .9rem; }
+  #backend[hidden] { display: none; }
+  #backend .detail { font-family: ui-monospace, monospace; font-size: .78rem; opacity: .75; margin-top: .25rem; word-break: break-word; }
 </style>
 
 <h1>Agent Orchestrator</h1>
 <div class="sub">Watch the reason → act → reason loop as it runs.</div>
+
+<div id="backend" role="status" aria-live="polite" hidden>
+  <strong>The model backend isn't answering.</strong> Runs will fail until it's back.
+  <div class="detail"></div>
+</div>
 
 <form id="f">
   <input id="task" placeholder="Ask something…" value="What is a Kubernetes StatefulSet?" autocomplete="off">
@@ -69,6 +79,40 @@
     out.appendChild(el);
     el.scrollIntoView({ block: 'end', behavior: 'smooth' });
   }
+
+  // The page used to learn the backend was down only after somebody submitted
+  // and waited for run_error. /health already knows - it polls the model
+  // backend in the background - so ask it, and say so before the wasted run.
+  //
+  // WARN, NEVER BLOCK. The verdict can be ten seconds old and the backend can
+  // come back while someone is still typing, so disabling Run would refuse
+  // requests that would have worked. The same reasoning keeps /health itself
+  // at 200: report the problem, do not act on it.
+  const backend = document.getElementById('backend');
+
+  async function checkBackend() {
+    let health;
+    try {
+      const r = await fetch('/health', { cache: 'no-store' });
+      health = await r.json();
+    } catch {
+      // Could not ask. That is a fact about this request, not about the model
+      // backend, so the banner stays as it was rather than inventing a verdict
+      // in either direction.
+      return;
+    }
+    if (health.status === 'degraded') {
+      const b = health.backend || {};
+      backend.querySelector('.detail').textContent = `${b.host} — ${b.detail}`;
+      backend.hidden = false;
+    } else {
+      // 'ok', or 'starting' - a backend nobody has checked yet is not a broken
+      // one, and saying otherwise would flash a warning on every deploy.
+      backend.hidden = true;
+    }
+  }
+  checkBackend();
+  setInterval(checkBackend, 15000);
 
   function finish() {
     if (source) source.close();
@@ -139,8 +183,12 @@
     source.addEventListener('truncated', (e) =>
       step('truncated', 'stopped early', JSON.parse(e.data).content));
 
-    source.addEventListener('run_error', (e) =>
-      step('error', 'error', JSON.parse(e.data).message));
+    // A failed run is the moment somebody wants to know why, so re-ask rather
+    // than leave them waiting up to a poll interval for the banner.
+    source.addEventListener('run_error', (e) => {
+      step('error', 'error', JSON.parse(e.data).message);
+      checkBackend();
+    });
 
     source.addEventListener('done', finish);
 
