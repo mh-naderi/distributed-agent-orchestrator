@@ -2,7 +2,7 @@
 
 ## What is in this document
 
-Thirty-three sections, most of them short. They are grouped here rather than
+Thirty-four sections, most of them short. They are grouped here rather than
 listed in order, because the order is chronological - the document grew as the
 project did - and chronology is rarely what a reader wants.
 
@@ -43,6 +43,7 @@ system actually behaves rather than how it was meant to.
 - [When asking again does not work](#when-asking-again-does-not-work)
 - [A signal for claims about a subject the evidence never mentioned](#a-signal-for-claims-about-a-subject-the-evidence-never-mentioned)
 - [One case that checks whether the answer is true](#one-case-that-checks-whether-the-answer-is-true)
+- [The eval cases are not independent](#the-eval-cases-are-not-independent)
 
 **How the claims here are kept honest.** A document full of numbers is only
 worth as much as the ability to re-take them.
@@ -1050,6 +1051,71 @@ The tests wedge for a bounded two seconds rather than an hour, and that came out
 of mutation testing reporting two cases as NOT CAUGHT. They were caught - by
 hanging. A suite that hangs says less than one that fails, and the first version
 of these tests would have wedged CI rather than failing it.
+
+## The eval cases are not independent
+
+An eval suite quietly assumes that each case measures the case. This one does
+not, quite: **a case's result depends on the case that ran before it.**
+
+It surfaced through a number that had been explained rather than measured.
+`honest-ignorance` failed its required-tool check in the published table, and
+the README attributed that to noise, citing ten isolated repeats where the check
+failed about one time in ten. That rate was accurate. It had failed in *both*
+published runs, though, and at a true one-in-ten rate two failures in two
+published runs is a one-in-a-hundred event - too unlikely to wave through.
+
+Measured on 2026-09-12:
+
+| context | failed required-tool check |
+|---|---|
+| repeated on its own | 1 of 10 |
+| repeated on its own, with the judge run between repeats | 1 of 10 |
+| inside the full suite | 4 of 5 |
+| run immediately after `code-review-syntax-error` | 4 of 5 |
+
+The judge was the first suspect, for a structural reason: `run_eval` calls it
+after every case and `experiment repeat` does not unless asked, so it was the one
+thing present in the suite and absent from the isolated runs. Interleaving it
+changed nothing. Placing a code-review case directly before `honest-ignorance`
+reproduced the suite rate exactly, so the cause is the preceding case. Every
+failure took the same path: two iterations, no tools, a tool call narrated
+instead of made, then an honest `unanswered`.
+
+### What it does and does not mean
+
+It does **not** touch the property that matters. Fabrication was 0 across every
+run where it was counted - twenty-five of them. The ordering changes whether the
+model *consults* anything before declining, not whether it invents an answer.
+
+It does mean the required-tool figure for this case was a property of the
+harness's ordering, and the README had said the opposite in so many words - that
+the assertion "measures a real property of the system rather than of the
+harness". Retired.
+
+The other eight cases were stable across all five suite runs, which suggests the
+effect concentrates where a 1.7B model's choice between answering and calling a
+tool sits closest to a tipping point. Five runs is enough to see that and not
+enough to promise it for the others.
+
+The mechanism is **not established**. Each run builds its request from scratch -
+same system prompt, same task, same tools - so the state that carries across
+cannot be in the request. The likeliest place is the model server between
+requests. That is written as a hypothesis because it is one; nothing here has
+tested it.
+
+### What was deliberately not done
+
+The suite was not reordered. Putting `honest-ignorance` first would make the row
+green, and it would do so by removing the conditions that expose the effect - a
+fix to the report rather than to anything reported on. The README says the
+assertion is kept because dropping an inconvenient signal is how a suite starts
+reporting what its author wants to hear, and moving it to where it passes is the
+same move with better manners.
+
+The obvious next experiments are cheap and unrun: restart the model server
+between a code-review case and `honest-ignorance`, which would confirm or rule out
+server-side state; and try each other case immediately before it, which would say
+whether code review is special or any preceding case will do.
 
 ## The images are checked by reading, not by building
 
