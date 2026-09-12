@@ -508,8 +508,10 @@ Prometheus and Grafana, the evaluation harness, and CI.
 Reachable behind one ingress — the UI at `localhost:18080`, Grafana at
 `/grafana/` — with no port-forwards for either. Conversations persist across
 turns within a session, history is trimmed against the context window, runs are
-serialised so two tabs cannot share one GPU, and a run that narrates a tool call
-instead of making one is asked again rather than ending on a non-answer.
+serialised so two tabs cannot share one GPU, the page warns before a run when the
+model backend is unreachable rather than after it fails, and a run that narrates
+a tool call instead of making one is asked again rather than ending on a
+non-answer.
 
 One thing is deliberately not verified: **the Claude escalation provider has
 never made a real API call.** It bills per token, this project runs on no cloud

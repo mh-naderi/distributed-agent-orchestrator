@@ -411,7 +411,9 @@ curl -s -N --get --data-urlencode "task=What is Kubernetes?" http://localhost:18
 ## Is anything actually wrong
 
 `/health` answers this, and it answers **200 whatever it finds** - the status
-code is for Kubernetes, the body is for you:
+code is for Kubernetes, the body is for you. The page at `localhost:18080` shows
+the same verdict as a red banner above the form, so anyone using the UI sees it
+without running this:
 
 ```bash
 curl -s http://127.0.0.1:18080/health
