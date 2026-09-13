@@ -344,10 +344,20 @@ was the last of five full-suite runs taken the same afternoon; the other four
 differed only in `honest-ignorance`, which passed once, and in
 `code-review-finds-a-real-bug`, whose grounding dropped to 3 once.
 
-**Fabrication was 0 in all 25 runs of `honest-ignorance` where it was counted**
-— the five suite runs and both sets of ten repeats below. That is the count
-that matters, and it holds. (The five paired runs were checked for the
-required-tool assertion only, and are not part of that 25.)
+**Fabrication is not zero.** It was flagged in 2 of 57 counted `honest-ignorance`
+runs over two days. One answer was read and the invention is real: it credited
+the Heart and Stroke Foundation's genuine 2019 report, *(Dis)Connected*, to the
+fictional Quazzlemint Foundation. The other's answer was not captured, so it is
+counted as flagged, not confirmed. An earlier version of this paragraph said
+fabrication "holds" at 0, which was true of the 25 runs it counted and wrong as a
+statement about the system.
+
+Chasing it found a hole in the warning meant to stop exactly this. Search
+results about the wrong subject carry a note saying so, but the check skipped
+the first word of the query, so a keyword search that opens with its subject —
+`Quazzlemint Foundation 2019 report` — came back with no warning at all. That is
+fixed. Whether it caused this fabrication is **not established**: the fabricating
+run's search query was not captured.
 
 ### The failing row is caused by the case before it
 
@@ -359,10 +369,13 @@ was measured rather than accepted:
 
 | context | failed required-tool check |
 |---|---|
-| repeated on its own | 1 of 10 |
-| repeated on its own, with the judge run between repeats | 1 of 10 |
-| inside the full suite | 4 of 5 |
-| run immediately after `code-review-syntax-error` | **4 of 5** |
+| alone, or directly after itself | 5 of 41 |
+| immediately after a code-review case | **18 of 24** |
+
+Pooled across every run over two days. The pools mix entry points — the first
+includes `experiment repeat` runs, the second the full suite — so the entry point
+was ruled out separately: `honest-ignorance` run alone through the same raw path
+the high-failure pairs used still failed only 2 of 8.
 
 So the cause is the case that runs before it — in the suite, three
 code-review cases — and not the LLM judge, which was the first suspect because
@@ -377,10 +390,21 @@ appears to concentrate where a 1.7B model's choice between answering and calling
 a tool is closest to a tipping point — but that is an observation from five
 runs, not a guarantee about the others.
 
-The mechanism is **not established**. Each run builds its request from scratch
-— same system prompt, same task, same tools — so the likeliest explanation
-is state the model server carries from one request to the next. That is a
-hypothesis, and it is written here as one.
+The mechanism is **not established**, and every explanation tested so far is
+ruled out:
+
+- **Not model-server state.** Unloading the model between a code-review case and
+  `honest-ignorance` left the rate unchanged: 4 of 5 either way.
+- **Not GPU memory.** What was loaded, and its split between GPU and CPU, was
+  identical in both contexts.
+- **Not conversation history or tool definitions.** Every run starts from exactly
+  the system prompt and the task, and the tool definitions were byte-identical.
+
+Most tellingly, the complete request sent for `honest-ignorance`'s first decision
+was captured in both contexts and is **byte-identical**. The model is asked the
+same thing and behaves differently, and nothing measured so far says why. An
+earlier version called model-server state "the likeliest explanation"; testing it
+is what retired it.
 
 The assertion is still kept, and the suite has deliberately **not** been
 reordered. Moving `honest-ignorance` first would turn this row green and remove
