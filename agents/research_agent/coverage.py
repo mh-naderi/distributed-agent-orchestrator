@@ -23,10 +23,39 @@ import re
 # model has answered from those - the last fabrication path left after the corpus
 # was cleaned up and the empty-evidence guardrail was added.
 #
-# Restricted to capitalised words, and never the first, which is capitalised only
-# because it starts the sentence. Proper nouns are where misattribution happens,
-# and a note that fires on ordinary words would be noise the model learns to skip.
+# Restricted to capitalised words, because proper nouns are where misattribution
+# happens, and a note that fires on ordinary words would be noise the model
+# learns to skip.
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9'-]*")
+
+# The first word is skipped ONLY when it is one of these - a word capitalised
+# because it opens a sentence, not because it names anything.
+#
+# This used to skip the first word unconditionally, on the reasoning that it is
+# capitalised by sentence position. That is true of a question and false of a
+# search query. "What did the Quazzlemint Foundation conclude in its 2019
+# report?" flagged Quazzlemint correctly; "Quazzlemint Foundation 2019 report"
+# flagged nothing, because the subject WAS the first word and was discarded -
+# and a keyword query that opens with its subject is exactly how a model writes
+# a search. The warning worked for the eval's phrasing and failed for the
+# model's, over identical wrong-subject results.
+#
+# A closed list rather than a dictionary of English, because sentence-starters
+# are a small closed class and proper nouns are not. Words under three letters
+# are already excluded below, so they need no entry here.
+_SENTENCE_STARTERS = frozenset({
+    # question words
+    "what", "who", "whom", "whose", "when", "where", "why", "how", "which",
+    # auxiliaries a question opens with
+    "are", "was", "were", "does", "did", "can", "could", "will", "would",
+    "should", "shall", "may", "might", "must", "has", "have", "had",
+    # determiners and pronouns
+    "the", "this", "that", "these", "those", "you", "they",
+    # imperatives a request opens with
+    "tell", "explain", "describe", "find", "search", "show", "give", "list",
+    "summarise", "summarize", "research", "compare", "define", "look",
+    "please", "about",
+})
 
 
 def unmentioned_terms(query: str, results: str) -> list[str]:
@@ -42,7 +71,9 @@ def unmentioned_terms(query: str, results: str) -> list[str]:
     haystack = results.lower()
 
     missing, seen = [], set()
-    for word in words[1:]:  # the first word is capitalised by sentence position
+    for position, word in enumerate(words):
+        if position == 0 and word.lower() in _SENTENCE_STARTERS:
+            continue
         if not word[0].isupper() or len(word) < 3:
             continue
         lowered = word.lower()
