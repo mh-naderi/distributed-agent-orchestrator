@@ -1,21 +1,30 @@
 """
 Code Analysis Agent - MCP Server
 
-Same pattern as research_agent/server.py. This agent is the one flagged
-in project notes as the candidate for the async worker-queue pattern
-later (Redis/RabbitMQ-backed), since code analysis can genuinely be slow.
-
-MVP: stays synchronous like the other two agents. The worker-queue
-version is a documented stretch goal, not required for the core build -
-see docs/architecture.md.
+Same pattern as research_agent/server.py, and synchronous like the other two
+agents - see the note at the end of this docstring for why that is settled
+rather than pending.
 
 analyze_code runs real static analysis - see analysis.py, which also records
 why it deliberately reports less than it could. An LLM review pass on top of
 the mechanical findings remains a possible extension, but it would make this
 agent depend on Ollama the way the retrieval agent does, and static analysis
 is the fast half.
-TODO(stretch goal, week 2+): convert this agent specifically to the
-async worker pattern and document the before/after in the README.
+
+This agent stays synchronous, deliberately. It was once flagged as the
+candidate for an async worker queue "since code analysis can genuinely be
+slow", with a TODO to convert it, and both outlived the decision that retired
+them: docs/architecture.md ("Sync vs. async tool execution") moved the
+async-worker candidacy to a code execution sandbox because static analysis is
+fast, then designed the sandbox out as well. The notes stayed here, opening
+this file by telling the next reader to do the opposite of what was decided,
+for a reason that was never true.
+
+"Fast" is measured rather than asserted. Through the real MCP path, round
+trip to the pod included, analyze_code took a median of 77 ms on a
+32-character snippet and 106 ms on a 14,289-character one with 150
+functions. A queue, a result store and polling would be infrastructure to
+avoid waiting a tenth of a second.
 """
 
 import os
