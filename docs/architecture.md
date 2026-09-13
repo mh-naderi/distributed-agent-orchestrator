@@ -1083,9 +1083,13 @@ instead of made, then an honest `unanswered`.
 
 ### What it does and does not mean
 
-It does **not** touch the property that matters. Fabrication was 0 across every
-run where it was counted - twenty-five of them. The ordering changes whether the
-model *consults* anything before declining, not whether it invents an answer.
+It does not change *whether* the model invents an answer. The ordering moves
+whether it consults anything before declining. But an earlier version of this
+paragraph added that fabrication "was 0 across every run where it was counted -
+twenty-five of them", as though that settled the property that matters, and the
+next day's runs unsettled it: fabrication was flagged in 2 of 57 counted runs,
+one of them read and real. See "A warning that fired for questions and not for
+searches" below.
 
 It does mean the required-tool figure for this case was a property of the
 harness's ordering, and the README had said the opposite in so many words - that
@@ -1097,11 +1101,64 @@ effect concentrates where a 1.7B model's choice between answering and calling a
 tool sits closest to a tipping point. Five runs is enough to see that and not
 enough to promise it for the others.
 
-The mechanism is **not established**. Each run builds its request from scratch -
-same system prompt, same task, same tools - so the state that carries across
-cannot be in the request. The likeliest place is the model server between
-requests. That is written as a hypothesis because it is one; nothing here has
-tested it.
+The mechanism is **not established**. This paragraph once named the model server
+between requests as "the likeliest place" and marked it untested. It has since
+been tested, along with everything else that seemed a candidate, and none of it
+survived:
+
+| candidate | test | result |
+|---|---|---|
+| model-server / KV-cache state | unload the model between the two cases | 4 of 5 either way |
+| GPU memory and CPU offload | snapshot `ollama ps` at the deciding call | identical, 100% GPU, both contexts |
+| conversation history | read `arun_traced` | every run starts from `[system, user]` |
+| tool definitions | fingerprint six discoveries | byte-identical, including after `analyze_code` |
+| entry point | run it alone through the suite's raw path | 2 of 8, near the isolated rate |
+
+The last check is the one that makes it genuinely puzzling. The **complete
+request** for `honest-ignorance`'s first decision - model, messages, tools,
+options - was captured in both contexts and hashed, and the hashes match. The
+model is sent the same bytes and, depending on what ran before, fails to
+consult a tool about six times as often - 18 of 24 against 5 of 41. Nothing
+measured so far accounts for that, and this section does not offer a guess in
+place of a measurement.
+
+### A warning that fired for questions and not for searches
+
+A real fabrication turned up while the ordering effect was being chased: an
+answer that credited the Heart and Stroke Foundation's genuine 2019 report,
+*(Dis)Connected*, to the fictional Quazzlemint Foundation. The detector flagged
+it, and reading the answer confirmed it was an invention rather than a misread
+denial.
+
+The first explanation was wrong, and worth recording because of how it was
+wrong. The corpus held several Heart and Stroke documents indexed that day, plus
+129 fictional fixtures written by an integration test, so "the eval is polluting
+the corpus it measures" looked like the cause. It was not the path:
+`retrieve` for that question returns `[no-evidence]`, because the retrieval floor
+keeps every one of those documents away. Two observations sitting next to each
+other - junk in the corpus, a fabrication - had been read as one causing the
+other without checking the path between them. The test fixtures were fixed as
+hygiene; the corpus was not purged, because nothing measured said it would help.
+
+The fabricating run had also called `search_web`, and that is where the real
+defect was. Search results about the wrong subject carry a note - "none of these
+results mention Quazzlemint" - and the check that produces it skipped the first
+word of the query unconditionally, reasoning that it is capitalised only because
+it starts the sentence. That holds for a question and fails for a search:
+
+| query | warned about |
+|---|---|
+| `What did the Quazzlemint Foundation conclude in its 2019 report?` | Quazzlemint |
+| `Quazzlemint Foundation 2019 report` | nothing |
+
+A keyword query that opens with its subject is how a model writes a search, so
+the warning protected the eval's phrasing and not the model's. The first word is
+now skipped only when it is a sentence-starter.
+
+Whether this hole caused that fabrication is **not established**. The run's
+search arguments were not captured, and in nine runs afterwards the model never
+called `search_web` at all, so there was nothing to recapture. The fix stands on
+the hole being real.
 
 ### What was deliberately not done
 
@@ -1112,10 +1169,9 @@ assertion is kept because dropping an inconvenient signal is how a suite starts
 reporting what its author wants to hear, and moving it to where it passes is the
 same move with better manners.
 
-The obvious next experiments are cheap and unrun: restart the model server
-between a code-review case and `honest-ignorance`, which would confirm or rule out
-server-side state; and try each other case immediately before it, which would say
-whether code review is special or any preceding case will do.
+The first of the two experiments this section proposed has been run, and ruled
+out server-side state. The second - whether code review is special or any
+preceding case will do - is still open, and so is the mechanism.
 
 ## The images are checked by reading, not by building
 
@@ -1818,8 +1874,19 @@ no server has quietly gone back to counting inside a tool body.
 ## Decision: the producer indexes its own output
 
 `index_documents` was never being called. The system prompt asks the model to
-index after searching; the small local model reliably declines, and it is right
-to - indexing pays off on the NEXT run and only costs tokens on this one. The
+index after searching; the small local model reliably declined, and it was right
+to - indexing pays off on the NEXT run and only costs tokens on this one.
+
+That is no longer a safe description, and nothing said so. By 2026-09-13 the
+corpus held model-issued index calls from nine separate days, the earliest
+2026-08-18 - identifiable as unattributed text carrying a caller's label, once
+the integration test's own fixtures are excluded - often with the question's
+subject as the label and sometimes with a paraphrase as the text. (A first count
+said "every day since 2026-09-02"; it had included the test fixtures, which
+filled in the days the model did not index.) The system prompt still carries
+the instruction. The retrieval floor has so far kept those documents away from
+real questions, which is why nothing visibly broke, but the reasoning below was
+written about a model that declined. The
 result was a durable index that nothing ever wrote to, which made the retrieval
 agent's persistence story hollow.
 
