@@ -14,7 +14,7 @@ Start the agents first:
 The retrieval agent also needs Ollama running with the embedding model pulled.
 """
 
-import uuid
+import re
 
 import pytest
 
@@ -56,18 +56,34 @@ async def test_index_then_retrieve_round_trip(registry):
     Exercises both retrieval tools across the network, and incidentally proves
     dispatch works - both tools live on the retrieval agent, search_web doesn't.
 
-    The marker is unique per run. It used to be a fixed string, which quietly
-    relied on the store accepting duplicates: once the store began skipping
-    text it already held, the second run of this test indexed 0 documents and
-    failed. A round-trip test should not depend on the corpus being empty of
-    its own fixture.
+    The marker is a FIXED string, and the test accepts it being indexed or
+    already present.
+
+    This runs against the real retrieval agent, so it writes to the real
+    corpus - the one piece of state in the system with no source to rebuild it
+    from - and nothing can remove what it writes: the agent exposes no delete
+    tool, deliberately, because every MCP tool is visible to the model.
+
+    It used to append a random suffix per run. That solved the problem of a
+    fixed string indexing 0 documents on its second run and failing an exact
+    "Indexed 1 document" check, and it did so by writing a brand-new fictional
+    document every time. The corpus held 129 of them before anyone looked. The
+    retrieval floor kept them away from real questions, which is why nothing
+    visibly broke, but a test that grows production data without bound is a
+    leak whether or not it is noticed.
+
+    So the check now accepts 0 or 1: the round trip is proven by retrieve
+    finding the marker and by the provenance assertions below, which hold either
+    way, and the corpus carries exactly one copy of this fixture instead of one
+    per run. Proving that a NEW document can be stored belongs to test_store.py,
+    which does not need the network or the real corpus to do it.
     """
-    marker = f"Xylophone Quarks Institute studies imaginary particles {uuid.uuid4().hex[:8]}"
+    marker = "Xylophone Quarks Institute studies imaginary particles (integration fixture)"
 
     indexed = await registry.call(
         "index_documents", {"texts": [marker], "source": "integration-test"}
     )
-    assert "Indexed 1 document" in indexed
+    assert re.search(r"Indexed [01] document", indexed), indexed
 
     found = await registry.call("retrieve", {"query": marker, "k": 3})
     assert marker in found
