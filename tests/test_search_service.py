@@ -325,10 +325,35 @@ def test_an_asserted_label_is_marked_unverified(label):
         ("what is kubernetes", "Docker and containers", []),
         # Case-insensitive matching: the result names it differently.
         ("Tell me about Kubernetes", "kubernetes orchestrates containers", []),
+        # A keyword query that OPENS with its subject. The first word used to be
+        # skipped unconditionally, so this - the same wrong-subject results that
+        # the question form above is warned about - produced no warning at all.
+        # It is how a model writes a search, which is the case that matters.
+        (
+            "Quazzlemint Foundation 2019 report",
+            "Annual Report 2019 - Mellon Foundation grants supported work",
+            ["Quazzlemint"],
+        ),
+        ("Quazzlemint", "Annual Report 2019 - Mellon Foundation", ["Quazzlemint"]),
+        # A subject-first query whose subject IS in the results stays quiet: the
+        # fix must not turn every keyword search into a warning.
+        ("Kubernetes StatefulSet", "A Kubernetes StatefulSet manages pods", []),
     ],
 )
 def test_only_unmatched_proper_nouns_are_reported(query, results, expected):
     assert research_server.unmentioned_terms(query, results) == expected
+
+
+@pytest.mark.parametrize("starter", ["What", "Who", "How", "Tell", "Explain", "Research", "The"])
+def test_a_sentence_starter_is_still_not_reported(starter):
+    """
+    The other half of the fix. Only words capitalised because they open a
+    sentence are skipped now, so each of those still has to stay silent - or
+    every question would carry a warning naming its own first word.
+    """
+    assert starter not in research_server.unmentioned_terms(
+        f"{starter} Kubernetes", "kubernetes orchestrates containers"
+    )
 
 
 def test_a_term_is_reported_once_however_often_it_is_asked(service, fake_search):
