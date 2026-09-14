@@ -33,6 +33,7 @@ run inside the pod; see docs/RUNBOOK.md.
 
 import argparse
 import asyncio
+import json
 import statistics
 import sys
 
@@ -113,6 +114,26 @@ def _report(label: str, runs: list[dict], attempted: int | None = None) -> None:
         print(f"     median {summary['median_seconds']}s per run")
 
 
+def describe_calls(calls: list[dict]) -> list[str]:
+    """
+    One line per tool call, saying what it was asked.
+
+    Printed under a fabricated run only. That is the row somebody will want to
+    explain, and the first question about it is what the model searched for:
+    the one fabrication confirmed so far could not be matched against a known
+    coverage-note bug because its query was never kept. Clean rows stay one
+    line each, or eight runs of output stop being readable at a glance.
+    """
+    if not calls:
+        return ["(no tools were called)"]
+    lines = []
+    for call in calls:
+        arguments = call.get("arguments")
+        shown = "(arguments not recorded)" if arguments is None else json.dumps(arguments)
+        lines.append(f"-> {call['name']} {shown[:100]}")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # repeat
 # ---------------------------------------------------------------------------
@@ -132,9 +153,11 @@ def repeat(case_id: str, runs: int, use_judge: bool) -> list[dict]:
             continue
 
         invented = result.get("invented_subject_claims") or []
+        calls = result.get("tool_calls") or []
         collected.append(
             {
                 "tools": result["tools_called"],
+                "calls": calls,
                 "invented": invented,
                 "seconds": result.get("seconds"),
             }
@@ -149,6 +172,9 @@ def repeat(case_id: str, runs: int, use_judge: bool) -> list[dict]:
         print(
             f"  {flag} run {i}: {trace_id}{extra} {shown[:78]}".replace(chr(10), " ")
         )
+        if invented:
+            for line in describe_calls(calls):
+                print(f"         {line}")
 
     _report(case_id, collected, attempted=runs)
     return collected

@@ -140,3 +140,62 @@ def test_a_report_without_an_attempted_count_is_unchanged(capsys):
     out = capsys.readouterr().out
     assert "0/3" in out
     assert "failed" not in out and "NOTHING MEASURED" not in out
+
+
+# ---------------------------------------------------------------------------
+# A fabricated run shows what the model searched for
+# ---------------------------------------------------------------------------
+
+
+def _fake_result(invented, calls):
+    return {
+        "tools_called": [c["name"] for c in calls],
+        "tool_calls": calls,
+        "invented_subject_claims": invented,
+        "answer": "an answer",
+        "seconds": 1.0,
+        "trace_id": "cafe1234",
+    }
+
+
+def test_a_fabricated_run_prints_the_query_that_preceded_it(monkeypatch, capsys):
+    """
+    The confirmed fabrication could not be matched against the coverage-note bug
+    because its query was never kept. The row that needs explaining now carries
+    the fact that would explain it.
+    """
+    calls = [{"name": "search_web", "arguments": {"query": "Quazzlemint Foundation 2019 report"}}]
+    monkeypatch.setattr(
+        experiment,
+        "run_case",
+        lambda case: _fake_result(["The Quazzlemint Foundation concluded X."], calls),
+    )
+
+    collected = experiment.repeat("honest-ignorance", runs=1, use_judge=False)
+
+    out = capsys.readouterr().out
+    assert "FAB run 1" in out
+    assert '-> search_web {"query": "Quazzlemint Foundation 2019 report"}' in out
+    assert collected[0]["calls"] == calls
+
+
+def test_a_clean_run_stays_on_one_line(monkeypatch, capsys):
+    calls = [{"name": "retrieve", "arguments": {"query": "anything"}}]
+    monkeypatch.setattr(experiment, "run_case", lambda case: _fake_result([], calls))
+
+    experiment.repeat("honest-ignorance", runs=1, use_judge=False)
+
+    out = capsys.readouterr().out
+    assert "ok  run 1" in out
+    assert "-> retrieve" not in out
+
+
+def test_a_fabrication_with_no_tool_calls_says_so_rather_than_nothing():
+    assert experiment.describe_calls([]) == ["(no tools were called)"]
+
+
+def test_arguments_that_were_not_recorded_are_not_shown_as_empty():
+    """None means the trace lost them, which is not the same as asking for nothing."""
+    lines = experiment.describe_calls([{"name": "search_web", "arguments": None}])
+
+    assert lines == ["-> search_web (arguments not recorded)"]
