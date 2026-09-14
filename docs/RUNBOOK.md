@@ -329,6 +329,20 @@ thing.
 Nothing is traced when the id is absent - a tool called by hand, or an older
 orchestrator - and calls still work; the field simply reads `-`.
 
+What the model *asked* each tool does not need the logs. Every row of
+`eval/results.json` carries `tool_calls`, the name and arguments of each call in
+the order they ran, and `experiment repeat` prints them under any run it flags
+as a fabrication:
+
+```
+  FAB run 3: cafe1234 The Quazzlemint Foundation's 2019 report concluded ...
+         -> search_web {"query": "Quazzlemint Foundation 2019 report"}
+```
+
+The logs cannot stand in for this. The research agent records a query only on a
+cache hit or a failure, and pod logs do not survive a restart. Results written
+before 2026-09-14 do not have the field.
+
 ## Reproducing a measurement
 
 Claims in `docs/architecture.md` come with numbers. These are how the numbers
