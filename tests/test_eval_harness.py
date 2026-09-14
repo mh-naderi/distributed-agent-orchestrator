@@ -699,6 +699,54 @@ def test_a_run_without_an_id_still_produces_a_result(monkeypatch):
     assert result["trace_id"] is None
     assert result["grounding"] == 5
 
+
+def _fake_judge(*a, **k):
+    return {
+        "grounding": 5,
+        "completeness": 5,
+        "relevance": 5,
+        "unsupported_claims": [],
+        "reasoning": "",
+        "judge_model": "fake",
+    }
+
+
+def test_a_result_records_what_each_tool_was_asked(monkeypatch):
+    """
+    The query a fabricating run sent to search_web was the one fact that could
+    have said whether a known coverage-note bug was involved, and no result
+    kept it. The arguments are recorded; the outputs are not, being large.
+    """
+
+    class Searched(_FakeTrace):
+        tools_called = ["search_web", "retrieve"]
+        tool_outputs = [
+            {"name": "search_web", "arguments": {"query": "Quazzlemint Foundation 2019 report"}, "output": "big"},
+            {"name": "retrieve", "arguments": {"query": "Quazzlemint", "k": 3}, "output": "big"},
+        ]
+
+    monkeypatch.setattr(run_eval, "run_traced", lambda task: Searched())
+    monkeypatch.setattr(run_eval, "judge", _fake_judge)
+
+    result = run_eval.run_case({"id": "x", "task": "t", "must_contain": []})
+
+    assert result["tool_calls"] == [
+        {"name": "search_web", "arguments": {"query": "Quazzlemint Foundation 2019 report"}},
+        {"name": "retrieve", "arguments": {"query": "Quazzlemint", "k": 3}},
+    ]
+    # Recorded as JSON, which is what the file on disk is.
+    assert json.loads(json.dumps(result))["tool_calls"] == result["tool_calls"]
+
+
+def test_a_trace_without_arguments_still_produces_a_result(monkeypatch):
+    """An older trace shape records None rather than failing the case."""
+    monkeypatch.setattr(run_eval, "run_traced", lambda task: _FakeTrace())
+    monkeypatch.setattr(run_eval, "judge", _fake_judge)
+
+    result = run_eval.run_case({"id": "x", "task": "t", "must_contain": []})
+
+    assert result["tool_calls"] == [{"name": "retrieve", "arguments": None}]
+
 # ---------------------------------------------------------------------------
 # The table's summary lines carry their own denominator
 # ---------------------------------------------------------------------------

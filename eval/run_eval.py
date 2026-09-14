@@ -293,6 +293,15 @@ def run_case(case: dict) -> dict:
         "seconds": round(time.time() - started, 1),
         "iterations": trace.iterations,
         "tools_called": trace.tools_called,
+        # What each call was asked, in the order the calls ran. The outputs are
+        # not written here - they are large, and the judge's verdict on them is
+        # - but the arguments are small and cannot be recovered afterwards: the
+        # research agent logs a query only on a cache hit or a failure. Missing
+        # them once left a fabrication that could not be traced to its search.
+        "tool_calls": [
+            {"name": t["name"], "arguments": t.get("arguments")}
+            for t in trace.tool_outputs
+        ],
         **automated,
         **subject,
         "within_claim_budget": within_claim_budget,
