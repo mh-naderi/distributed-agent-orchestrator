@@ -80,6 +80,48 @@ class TraceResult:
     trace_id: str | None = None
 
 
+def tool_history(messages: list[dict]) -> tuple[list[str], list[dict]]:
+    """
+    What the model asked for, and what each request got back.
+
+    Every output carries the arguments it was produced from. They used to be
+    dropped here, while the messages this reads held them all along, and that
+    cost a real investigation: a run credited a genuine report to the fictional
+    Quazzlemint Foundation after calling search_web, and whether the query it
+    sent opened with the subject - the exact shape a coverage-note bug had just
+    been found to miss - could not be answered. The output was kept, the query
+    that produced it was not, and the model never searched again in the runs
+    that followed, so there was nothing to recapture.
+
+    Outputs are paired with requests by tool_call_id, not by position. The model
+    can request several tools in one turn, and a positional pairing that drifted
+    would attach one call's arguments to another call's output without any
+    visible sign - a trace that is confidently wrong, which is worse than one
+    that is missing. An output with no matching request says None rather than
+    borrowing a neighbour's.
+    """
+    tools_called = []
+    arguments_by_id = {}
+    for message in messages:
+        if message["role"] != "assistant":
+            continue
+        for call in message.get("tool_calls", []):
+            tools_called.append(call["name"])
+            if call.get("id") is not None:
+                arguments_by_id[call["id"]] = call.get("arguments")
+
+    tool_outputs = [
+        {
+            "name": m.get("name", "?"),
+            "arguments": arguments_by_id.get(m.get("tool_call_id")),
+            "output": m.get("content", ""),
+        }
+        for m in messages
+        if m["role"] == "tool"
+    ]
+    return tools_called, tool_outputs
+
+
 async def arun_traced(task: str) -> TraceResult:
     """
     Like arun, but records what happened along the way.
@@ -116,17 +158,7 @@ async def arun_traced(task: str) -> TraceResult:
         logger.info("run end trace=%s iterations=%s", trace_id, final_state["iterations"])
 
     messages = final_state["messages"]
-    tools_called = [
-        call["name"]
-        for message in messages
-        if message["role"] == "assistant"
-        for call in message.get("tool_calls", [])
-    ]
-    tool_outputs = [
-        {"name": m.get("name", "?"), "output": m.get("content", "")}
-        for m in messages
-        if m["role"] == "tool"
-    ]
+    tools_called, tool_outputs = tool_history(messages)
 
     return TraceResult(
         answer=messages[-1].get("content", ""),
