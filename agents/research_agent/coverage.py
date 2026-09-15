@@ -58,6 +58,34 @@ _SENTENCE_STARTERS = frozenset({
 })
 
 
+def subject_terms(text: str) -> list[str]:
+    """
+    The capitalised words that say what a piece of text is ABOUT.
+
+    Separated from the comparison below because the two questions are different
+    and both get asked. "Which of these are missing from the results" annotates a
+    search; "does this name a subject at all" is what tells a label like
+    `web` or `integration-test` - which names nothing and cannot be wrong - apart
+    from one like `Quazzlemint Foundation 2019 report`, which makes a claim that
+    the text can fail to support.
+
+    Order is the order of appearance, and repeats are dropped, so a caller can
+    quote the list back without repeating itself.
+    """
+    terms, seen = [], set()
+    for position, word in enumerate(_WORD.findall(text)):
+        if position == 0 and word.lower() in _SENTENCE_STARTERS:
+            continue
+        if not word[0].isupper() or len(word) < 3:
+            continue
+        lowered = word.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        terms.append(word)
+    return terms
+
+
 def unmentioned_terms(query: str, results: str) -> list[str]:
     """
     Which capitalised words from the query appear in none of the results?
@@ -67,19 +95,5 @@ def unmentioned_terms(query: str, results: str) -> list[str]:
     with it is the model's business; what this avoids is presenting results as
     though they were about the thing that was asked for.
     """
-    words = _WORD.findall(query)
     haystack = results.lower()
-
-    missing, seen = [], set()
-    for position, word in enumerate(words):
-        if position == 0 and word.lower() in _SENTENCE_STARTERS:
-            continue
-        if not word[0].isupper() or len(word) < 3:
-            continue
-        lowered = word.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        if lowered not in haystack:
-            missing.append(word)
-    return missing
+    return [term for term in subject_terms(query) if term.lower() not in haystack]
