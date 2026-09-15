@@ -105,6 +105,7 @@ DENIAL = re.compile(
     | \bcould\s+not\b | \bcouldn't\b
     | \bcannot\b | \bcan't\b | \bdoesn't\b | \bdon't\b | \bdidn't\b
     | \bfictional\b | \bdoes\s+not\s+seem\b
+    | \b(?:not\s+possible|impossible) \s+ to \s+ (?:determin\w* | confirm\w* | identif\w*)
     """,
     re.IGNORECASE | re.VERBOSE,
 )
