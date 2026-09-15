@@ -22,9 +22,9 @@ import os
 
 import ollama
 from instrumentation import InstrumentedMCP
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import Counter, Gauge, start_http_server
 
-from coverage import unmentioned_terms
+from coverage import subject_terms, unmentioned_terms
 from store import UNATTRIBUTED, VectorStore, chunk, is_derived
 
 
@@ -32,6 +32,28 @@ from store import UNATTRIBUTED, VectorStore, chunk, is_derived
 # stateful one also has a *size*, and "how big is the corpus" is the first thing
 # you want on a dashboard when retrieval quality changes unexpectedly.
 DOCUMENTS_INDEXED = Gauge("retrieval_documents_total", "Documents currently in the index")
+
+# Does the label a caller puts on a document name anything the document says?
+#
+# WHY THIS EXISTS. On 2026-09-15 the model indexed the Bill & Melinda Gates
+# Foundation's 2019 annual report under source="Quazzlemint Foundation 2019
+# report" - the fictional subject it had been asked about and had just failed to
+# find. It did that in three runs of forty, and the only reason anyone noticed
+# was that an experiment happened to be recording tool arguments that day.
+#
+# Nothing is broken by it: the store files a caller's label as a claim rather
+# than as the document's origin, and retrieval presents it as "unverified label".
+# That is exactly why it needs a number. A behaviour that is contained rather
+# than prevented stays contained only while somebody is watching, and the corpus
+# is the one piece of state here with no source to rebuild it from.
+#
+# Three states, not two, because "the label names nothing" is not a failure:
+# `web` and `integration-test` make no claim that a document can contradict.
+INDEX_LABELS = Counter(
+    "retrieval_index_labels_total",
+    "Documents offered to index_documents, by whether the label's subject appears in the text",
+    ["subject"],
+)
 
 METRICS_PORT = 9101  # inherited from the summarizer agent it replaced
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
@@ -129,13 +151,41 @@ store = VectorStore(embed)
 DOCUMENTS_INDEXED.set(store.count())
 
 
+def label_subject(source: str, text: str) -> str:
+    """
+    Is the subject this label names actually in the document?
+
+    - "unnamed"  - the label names no subject ("web", "eval-fixture"), so there
+                   is nothing here that the text could fail to support.
+    - "present"  - the label names a subject and the text mentions it.
+    - "absent"   - the label names a subject the text never mentions. A real
+                   annual report filed under a foundation that does not appear
+                   in it is the case this was built from.
+
+    A URL is a derived source read out of the document, not a claim, so it is
+    excluded rather than run through a word check it would fail for punctuation
+    reasons.
+    """
+    if is_derived(source) or source == UNATTRIBUTED:
+        return "unnamed"
+    if not subject_terms(source):
+        return "unnamed"
+    return "absent" if unmentioned_terms(source, text) else "present"
+
+
 @mcp.tool()
 def index_documents(texts: list[str], source: str = "unknown") -> str:
     """Store documents in the vector index so they can be retrieved later by
     meaning. Pass the text of search results or any other material worth
     remembering, and a short label for where it came from. Text separated by
     blank lines is stored as separate documents."""
-    count = store.index(chunk(texts), source)
+    documents = chunk(texts)
+    # Counted per document OFFERED, not per document stored: the store skips
+    # text it already holds, and what this measures is what the caller claimed,
+    # which happens whether or not the write was a duplicate.
+    for document in documents:
+        INDEX_LABELS.labels(subject=label_subject(source, document)).inc()
+    count = store.index(documents, source)
     DOCUMENTS_INDEXED.set(store.count())
     # Do not echo the caller's label back as though it were applied. A document
     # that names its own origin keeps that instead, and saying otherwise would

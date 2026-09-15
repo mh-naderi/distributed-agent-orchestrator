@@ -573,3 +573,71 @@ def test_a_hit_and_a_miss_are_counted_separately(service, fake_search):
 
     assert lookups("miss") == misses_before + 1
     assert lookups("hit") == hits_before + 1
+
+
+# ---------------------------------------------------------------------------
+# Whether an indexing label names anything the document says
+# ---------------------------------------------------------------------------
+# From a real observation: the model indexed the Gates Foundation's 2019 annual
+# report under source="Quazzlemint Foundation 2019 report", the fictional
+# subject it had just failed to find. The store already refuses to treat a
+# caller's label as an origin, so nothing broke - but nothing counted it either,
+# and it was found by reading raw experiment output rather than a dashboard.
+
+GATES = (
+    "Annual Report 2019 - Bill & Melinda Gates Foundation. Through investments "
+    "in alternative approaches we played a part in some remarkable breakthroughs."
+)
+
+
+@pytest.mark.parametrize(
+    "label, text, expected",
+    [
+        # The case that prompted this, verbatim from the run.
+        ("Quazzlemint Foundation 2019 report", GATES, "absent"),
+        # The same shape, honestly labelled.
+        ("Gates Foundation 2019 report", GATES, "present"),
+        # Labels that name no subject cannot be wrong about one.
+        ("web", GATES, "unnamed"),
+        ("integration-test", GATES, "unnamed"),
+        ("eval-fixture", GATES, "unnamed"),
+        # A URL is read out of the document, not asserted about it.
+        ("https://example.org/report.pdf", GATES, "unnamed"),
+    ],
+)
+def test_a_label_is_judged_against_the_document_it_is_put_on(label, text, expected):
+    assert retrieval_server.label_subject(label, text) == expected
+
+
+def test_an_unattributed_document_makes_no_claim():
+    from store import UNATTRIBUTED
+
+    assert retrieval_server.label_subject(UNATTRIBUTED, GATES) == "unnamed"
+
+
+def test_every_document_in_a_call_is_counted_separately(monkeypatch):
+    """
+    One call can carry several documents, and the label applies to each of them.
+    Counting per call would file "one mislabelled thing" for a call that stored
+    five, which is the number that would end up on the dashboard.
+    """
+    seen = []
+
+    class FakeCounter:
+        def labels(self, subject):
+            seen.append(subject)
+            return self
+
+        def inc(self):
+            pass
+
+    monkeypatch.setattr(retrieval_server, "INDEX_LABELS", FakeCounter())
+    monkeypatch.setattr(retrieval_server.store, "index", lambda documents, source: len(documents))
+    monkeypatch.setattr(retrieval_server.store, "count", lambda: 1)
+
+    retrieval_server.index_documents(
+        texts=[GATES, "Quazzlemint Foundation was founded in 1994."],
+        source="Quazzlemint Foundation 2019 report",
+    )
+
+    assert seen == ["absent", "present"]

@@ -356,6 +356,30 @@ data:
               summary: "The retrieval corpus lost more than half its documents"
               description: "The index is under half the size it recently was. If this was a restore or a purge, it is expected; if not, the volume has lost data and docs/RUNBOOK.md has the restore procedure."
 
+          - alert: DocumentsFiledUnderAnAbsentSubject
+            # The model indexes what it just read, and it labels it with what it
+            # was ASKED about. Those are not the same thing: asked about a
+            # foundation that does not exist, it filed a real foundation's annual
+            # report under the fictional name. Three of forty runs did that.
+            #
+            # Nothing downstream trusts the label - the store keeps it as a
+            # claim, retrieval prints "unverified label" - so this is a warning
+            # about the corpus filling with misfiled material, not an outage.
+            #
+            # Majority again, and the denominator excludes nothing: labels that
+            # name no subject count as "unnamed" and sit in the total, so routine
+            # indexing under `web` or `eval-fixture` pushes this ratio DOWN. It
+            # takes a real run of mislabelled documents to reach half.
+            expr: >-
+              sum(rate(retrieval_index_labels_total{subject="absent"}[30m]))
+              / sum(rate(retrieval_index_labels_total[30m])) > 0.5
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Most indexed documents are filed under a subject they never mention"
+              description: "Over half the documents indexed in the last 30m carry a label naming something the text does not mention - the shape of a model indexing search results under the question it was asked. The corpus is not corrupted (labels are stored as claims, not origins), but it is accumulating misfiled material."
+
       # ------------------------------------------------------------------
       # Is what it produces trustworthy
       # ------------------------------------------------------------------

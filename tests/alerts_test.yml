@@ -474,6 +474,44 @@ tests:
         alertname: CorpusMostlyGone
         exp_alerts: []
 
+  - interval: 1m
+    name: indexing search results under the question asked alerts
+    input_series:
+      # What three runs of forty did: index a real foundation's annual report
+      # under the fictional subject the question named.
+      # Six documents in ten filed under a subject the text never mentions -
+      # over half, and not the trivial all-of-them case: a rule that only fired
+      # at 100% would pass a fixture built that way and miss the majority it is
+      # written for.
+      - series: 'retrieval_index_labels_total{subject="absent"}'
+        values: "0+6x90"
+      - series: 'retrieval_index_labels_total{subject="present"}'
+        values: "0+4x90"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DocumentsFiledUnderAnAbsentSubject
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Most indexed documents are filed under a subject they never mention"
+              description: "Over half the documents indexed in the last 30m carry a label naming something the text does not mention - the shape of a model indexing search results under the question it was asked. The corpus is not corrupted (labels are stored as claims, not origins), but it is accumulating misfiled material."
+
+  - interval: 1m
+    name: ordinary indexing under a label that names nothing stays quiet
+    input_series:
+      # `web`, `eval-fixture`, the integration test's fixture: labels that make
+      # no claim a document could contradict. These are in the denominator, so
+      # an occasional mislabelled document cannot reach half.
+      - series: 'retrieval_index_labels_total{subject="unnamed"}'
+        values: "0+6x90"
+      - series: 'retrieval_index_labels_total{subject="absent"}'
+        values: "0+4x90"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DocumentsFiledUnderAnAbsentSubject
+        exp_alerts: []
+
   # ------------------------------------------------------------------
   # An idle cluster must be silent. Every ratio rule divides by a rate
   # that is absent when nothing runs; this proves that produces no

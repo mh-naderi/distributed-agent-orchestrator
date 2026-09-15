@@ -456,6 +456,38 @@ data:
               "legendFormat": "all discovery passes"
             }
           ]
+        },
+        {
+          "type": "timeseries",
+          "id": 21,
+          "title": "Documents filed under a subject they never mention",
+          "description": "Documents handed to index_documents, split by whether the label the caller put on them names something the text actually says.\n\nThe model indexes what it just read and labels it with what it was ASKED about, and those two come apart exactly where it matters: asked about a foundation that does not exist, it indexed a real foundation's annual report under the fictional name. Three runs in forty did that on 2026-09-15, and it was found by reading raw experiment output, because nothing showed it.\n\nNothing downstream believes a label - store.py keeps it as claimed_source and retrieval prints 'unverified label' - so an absent line is misfiling, not corruption. It is charted because a behaviour that is contained rather than prevented stays contained only while somebody is watching, and the corpus is the one piece of state here with no source to rebuild it from.\n\n'unnamed' is the healthy bulk: labels like web, eval-fixture, or a URL read out of the document name no subject and so cannot contradict one. Counted per document offered rather than per document stored, since the store skips text it already holds and the caller's claim was made either way.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 68
+          },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "decimals": 0
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(retrieval_index_labels_total{subject=\"absent\"}[5m]))",
+              "legendFormat": "subject absent from the text"
+            },
+            {
+              "expr": "sum(rate(retrieval_index_labels_total{subject=\"present\"}[5m]))",
+              "legendFormat": "subject present"
+            },
+            {
+              "expr": "sum(rate(retrieval_index_labels_total{subject=\"unnamed\"}[5m]))",
+              "legendFormat": "label names no subject"
+            }
+          ]
         }
       ]
     }
