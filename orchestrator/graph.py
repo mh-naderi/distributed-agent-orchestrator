@@ -238,10 +238,10 @@ async def nudge(state: AgentState) -> dict:
     harness and the judge alike, saw a normal answer. Reproduced 5 times out
     of 5, so it is a behaviour rather than a fluke.
 
-    A user-role message rather than a system one, for portability: the
-    Claude provider lifts every system message into the top-level system
-    parameter, which would move this instruction away from the position
-    where it means something.
+    A user-role message rather than a system one, for portability. Hosted APIs
+    lift every system message into a top-level system parameter - the Anthropic
+    provider this project briefly had did exactly that - which would move this
+    instruction away from the position where it means something.
     """
     logger.info("model described a tool call without making one; nudging once")
     return {
@@ -263,8 +263,8 @@ async def reground(state: AgentState) -> dict:
     cause is not what the documents claimed. It is that an answer was
     possible at all when nothing supported one.
 
-    A user-role message for the same portability reason as the nudge: the
-    Claude provider hoists system messages out of position.
+    A user-role message for the same portability reason as the nudge: a
+    provider that hoists system messages out of position would break it.
     """
     logger.info("every tool reported no evidence and the model answered anyway; regrounding once")
     return {
@@ -338,8 +338,9 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
 
     The registry and provider are passed in rather than constructed here so
     the graph has no opinion about which LLM is behind it or which agents are
-    reachable. That's what lets the Claude fallback and any future agent slot
-    in without touching this file - and it makes the nodes testable with fakes.
+    reachable. That's what let a second provider be added and later removed
+    without touching this file, and what lets any future agent slot in - and it
+    makes the nodes testable with fakes.
 
     Only the two nodes that USE them are defined here. Everything else - the
     routing and the recovery nodes - is a pure function of state and lives at
@@ -361,13 +362,6 @@ def build_graph(registry: MCPToolRegistry, provider: LLMProvider):
 
         message: dict = {"role": "assistant", "content": response.content}
 
-        # Carried opaquely for providers that must replay their own output
-        # verbatim. Claude needs it: with thinking and tool use combined, its
-        # thinking blocks have to be echoed back unchanged on the next turn,
-        # and rebuilding them from `content` would silently drop them. Nothing
-        # in the graph reads this - it only has to survive the round trip.
-        if response.raw_content is not None:
-            message["_claude_content"] = response.raw_content
         if response.tool_calls:
             message["tool_calls"] = [
                 {"id": call.id, "name": call.name, "arguments": call.arguments}

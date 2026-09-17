@@ -272,47 +272,31 @@ longer than `MAX_TASK_CHARS` instead.
 Sessions live in memory and are bounded by `MAX_SESSIONS` and `SESSION_TTL`;
 a restart forgets them.
 
-## Escalating to Claude
+## There is one model, and no escalation path
 
-Local inference is the default because it is free. `docs/architecture.md`
-concludes that a 4GB laptop GPU is under-specified for this workload, and the
-Claude API is the escalation path for runs where the small model is not good
-enough — its measured cost is tool-selection accuracy, not fluency.
+Local inference is the only path. A second provider used to sit behind an
+*escalate to Claude* checkbox: the Anthropic API, for runs where a 1.7B model is
+not good enough — its measured cost is tool-selection accuracy, not fluency.
 
-Escalation is **manual, per request**: tick *escalate to Claude* in the UI, or
-add `&escalate=1` to `/stream`. An automatic rule (after N iterations, or on a
-failed tool selection) was left for later — a three-case eval cannot tell
-whether such a heuristic helps, and spending money on a guess is worse than a
-switch somebody chose to flip.
+**It was removed on 2026-09-17, because it had never run.** The API bills per
+token, this project has a no-cloud-budget constraint, and that made the path
+permanently unverifiable rather than merely untested. Roughly 470 lines — the
+provider, its 15 tests against a fake client, four settings and the UI control
+— described behaviour nobody could confirm, and one detail had leaked into the
+shared loop: every message the graph produced carried a `_claude_content` key so
+that provider could replay thinking blocks it never received.
 
-```bash
-export ANTHROPIC_API_KEY=...   # read from the environment, never stored here
-```
+What stayed is the seam it proved. `orchestrator/llm.py` keeps the
+`LLMProvider` protocol, the provider-neutral `ToolCall` and `LLMResponse`, and a
+`get_provider()` that is the one place a second provider goes. The conversion
+layer is the only thing a new provider has to write; nothing in the graph or in
+state changes. Removing an implementation without touching the graph is itself
+the evidence that the seam works.
 
-Without the key, an escalated request **fails** with a message naming the
-missing variable. It does not quietly answer with the local model — a request
-that asked for the better model and silently got the weaker one is the failure
-this project keeps having to correct.
-
-Set `CLAUDE_MODEL` to change the model and `CLAUDE_FALLBACKS=off` to drop the
-server-side refusal fallbacks, which ride on a beta not every organisation has
-enabled.
-
-That `export` covers host-process mode. **In the cluster the orchestrator is a
-pod and does not see your shell**, so escalation there additionally needs a
-Secret and a `secretKeyRef` on the Deployment — neither of which is wired up,
-because of the next paragraph.
-
-**This path has never run against the real API.** The Anthropic API bills per
-token and needs a positive balance, and this project has a no-cloud-budget
-constraint it is not going to break for a checkmark. So the provider is written
-and its translation layer is covered by 14 tests against a fake client — the
-system prompt lifted into its own parameter, tool results batched into one
-message, thinking blocks replayed unchanged — but no request has ever left the
-machine. What *is* verified in the cluster is the guard: escalating without a
-key fails loudly rather than silently answering with the weaker model.
-
-Treat it as a designed and tested extension point, not a working feature.
+The reasoning that was specific to a hosted API is kept where it still applies:
+the nudge and reground prompts are user-role messages rather than system ones,
+because a provider that lifts system messages into a top-level parameter would
+move them away from the position where they mean anything.
 
 ## Evaluation
 
@@ -562,8 +546,8 @@ model backend is unreachable rather than after it fails, and a run that narrates
 a tool call instead of making one is asked again rather than ending on a
 non-answer.
 
-One thing is deliberately not verified: **the Claude escalation provider has
-never made a real API call.** It bills per token, this project runs on no cloud
-budget, and that trade was made knowingly rather than overlooked. See
-"Escalating to Claude" above for exactly what is and is not covered.
+One thing was deliberately not verified, and has now been deleted rather than
+left standing: the hosted-model escalation provider never made a real API call,
+so it was removed instead of documented as working. See "There is one model, and
+no escalation path" above.
 

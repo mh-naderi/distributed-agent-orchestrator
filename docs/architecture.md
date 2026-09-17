@@ -38,6 +38,7 @@ system actually behaves rather than how it was meant to.
 - [The corpus learned to vouch for a fiction](#the-corpus-learned-to-vouch-for-a-fiction)
 - [Decision: a failed search is not an absence](#decision-a-failed-search-is-not-an-absence)
 - [Decision: the cache remembers evidence and nothing else](#decision-the-cache-remembers-evidence-and-nothing-else)
+- [Decision: the escalation path was removed rather than left unverified](#decision-the-escalation-path-was-removed-rather-than-left-unverified)
 - [Saying which results are not about what was asked](#saying-which-results-are-not-about-what-was-asked)
 - [The guardrail for answering from nothing](#the-guardrail-for-answering-from-nothing)
 - [When asking again does not work](#when-asking-again-does-not-work)
@@ -433,11 +434,12 @@ used to hang the orchestrator forever, since the max-iteration guardrail bounds
 loop count and not call duration).
 
 The honest conclusion is that a 4GB laptop GPU is under-specified for this
-workload, and the documented Claude API fallback - already the plan for harder
-reasoning - is the real answer for anything sustained. Running the Kubernetes
-cluster and local inference simultaneously is also avoidable: the agents run
-fine as host processes while iterating, and the cluster is for demonstrating the
-Kubernetes story.
+workload, and a hosted model is the real answer for anything sustained. That
+answer was written and then removed rather than kept as decoration - see
+"Decision: the escalation path was removed rather than left unverified" below.
+Running the Kubernetes cluster and local inference simultaneously is also
+avoidable: the agents run fine as host processes while iterating, and the
+cluster is for demonstrating the Kubernetes story.
 
 ## Adding a tool is mechanically free and behaviourally not
 
@@ -1998,6 +2000,53 @@ line, an empty corpus would have looked exactly like a working one.
 Measured: one search took the corpus from 14 documents to 19. Repeats do not
 accumulate, because the store now skips text it already holds.
 
+## Decision: the escalation path was removed rather than left unverified
+
+A second provider sat behind an `escalate=1` flag for weeks: the Anthropic API,
+for the runs where a 1.7B local model is not good enough. The translation layer
+was real work - the system prompt lifted into its own parameter, tool results
+batched into one user message, thinking blocks replayed unchanged - and 15 tests
+covered it against a fake client.
+
+It never made a real API call. The README said so plainly, which was honest and
+also the whole problem: the API bills per token, this project's constraint is no
+cloud budget, so the path was not merely untested but permanently unverifiable.
+
+### What it cost to keep
+
+- **About 470 lines** across the provider, its tests, four settings and a UI
+  control, all describing behaviour nobody could confirm.
+- **A provider-specific key in the shared loop.** `graph.py` wrote
+  `_claude_content` into every message so a provider that never ran could replay
+  thinking blocks. The unused path was shaping the code the used path goes
+  through, which is the part that decided this.
+- **A dependency** (`anthropic`) in the orchestrator image.
+- **A claim to defend.** "Designed and tested extension point, not a working
+  feature" is a sentence that needs re-explaining every time somebody reads the
+  feature list.
+
+### What was kept
+
+The seam, which is the part that was actually demonstrated: the `LLMProvider`
+protocol, the provider-neutral `ToolCall` and `LLMResponse`, and `get_provider()`
+as the single place a provider is chosen. Removing a whole provider touched no
+node in the graph and no message in state, which is better evidence that the
+abstraction holds than the provider's own tests were.
+
+Kept too is the reasoning that generalises. The nudge and reground prompts are
+user-role rather than system messages because a hosted API lifts system messages
+into a top-level parameter and would move them out of position; that was learned
+from the removed provider and is still true of the next one.
+
+### What this is not
+
+It is not a claim that local inference is sufficient. The hardware section's
+conclusion stands: 4GB is under-specified, and anything sustained wants a bigger
+model. The decision is narrower - an escalation path that cannot be exercised is
+worse than no escalation path, because it reads as capability while being
+scaffolding. The seam means adding one back is a single file when there is a way
+to prove it works.
+
 ## Build plan
 
 - Week 1: MCP servers -> orchestrator graph -> end-to-end local run **(done)**
@@ -2007,8 +2056,9 @@ accumulate, because the store now skips text it already holds.
 ## Local-only, no cloud budget
 
 Entire system runs on a local Kubernetes cluster (kind/minikube) and
-local LLM inference (Ollama), with a thin Claude API fallback for harder
-reasoning steps planned. No cloud GPU rental required, in contrast to an
+local LLM inference (Ollama). A thin hosted-API fallback for harder reasoning
+was planned, built, and then removed once it was clear the budget constraint
+made it unverifiable. No cloud GPU rental required, in contrast to an
 inference-serving-style project, which was considered and set aside
 specifically because of the budget constraint.
 

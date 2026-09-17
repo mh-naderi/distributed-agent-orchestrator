@@ -453,7 +453,7 @@ NODE_HANDLERS = {
 }
 
 
-async def _run(task: str, escalate: bool = False, session_id: str | None = None):
+async def _run(task: str, session_id: str | None = None):
     """
     Drive the graph and translate each step into an event.
 
@@ -535,7 +535,7 @@ async def _run(task: str, escalate: bool = False, session_id: str | None = None)
                 # in order reconstructs the final history without a second
                 # pass over the graph.
                 final_history = list(history)
-                async for chunk in build_graph(registry, get_provider(escalate)).astream(state):
+                async for chunk in build_graph(registry, get_provider()).astream(state):
                     for node, update in chunk.items():
                         messages = update.get("messages") or []
                         final_history.extend(messages)
@@ -599,11 +599,10 @@ async def stream(request):
 
     # Escalation is opt-in per request rather than a heuristic. See
     # get_provider for why there is no automatic rule yet.
-    escalate = request.query_params.get("escalate", "").lower() in ("1", "true", "yes", "on")
     # Optional: without it each request is a fresh conversation, which is the
     # previous behaviour and still the right one for a one-off question.
     session_id = request.query_params.get("session") or None
-    return EventSourceResponse(_run(task, escalate=escalate, session_id=session_id))
+    return EventSourceResponse(_run(task, session_id=session_id))
 
 
 @asynccontextmanager
