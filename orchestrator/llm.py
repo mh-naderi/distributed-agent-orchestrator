@@ -16,7 +16,6 @@ docs/architecture.md - and the seam it proved is what stayed.
 """
 
 import logging
-import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Protocol
