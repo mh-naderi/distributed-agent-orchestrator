@@ -50,7 +50,7 @@ TTL_SECONDS = float(os.environ.get("SEARCH_CACHE_TTL", "900"))
 # distinct queries and an experiment repeats one, so 128 is far more than a
 # session needs; at roughly 3KB per entry the whole cache is well under a
 # megabyte even when full.
-MAX_ENTRIES = int(os.environ.get("SEARCH_CACHE_MAX_ENTRIES", "128"))
+MAX_ENTRIES = 128
 
 
 class SearchCache:

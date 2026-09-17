@@ -73,7 +73,7 @@ import sqlite3
 import sys
 
 LIVE = os.environ.get("RETRIEVAL_DB_PATH", "/data/retrieval.db")
-INCOMING = os.environ.get("RETRIEVAL_INCOMING_PATH", LIVE + ".incoming")
+INCOMING = LIVE + ".incoming"
 
 # The tables this agent needs. document_vectors is a sqlite-vec virtual table;
 # its four shadow tables come with it and are not checked separately.

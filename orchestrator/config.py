@@ -63,7 +63,7 @@ MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "120"))
 # An EMPTY result is never cached, whatever this is set to - see
 # orchestrator/api.py. Freezing "no agents are up" for a minute would turn a
 # blip into an outage.
-MCP_DISCOVERY_TTL = float(os.environ.get("MCP_DISCOVERY_TTL", "60"))
+MCP_DISCOVERY_TTL = 60.0
 
 # How often /health re-checks whether the model backend is answering, and how
 # long it waits before calling it unreachable.
@@ -177,7 +177,7 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "2m")
 # in CHARACTERS rather than tokens - a proxy that has to be wrong in the safe
 # direction. Overflow is not an error in Ollama: it truncates from the front,
 # which would silently discard the system prompt.
-HISTORY_BUDGET_FRACTION = float(os.environ.get("HISTORY_BUDGET_FRACTION", "0.5"))
+HISTORY_BUDGET_FRACTION = 0.5
 
 # Conversations are held in memory and bounded by both count and age. The key
 # is chosen by the client, so an unbounded store would be a memory leak with a
@@ -186,8 +186,8 @@ HISTORY_BUDGET_FRACTION = float(os.environ.get("HISTORY_BUDGET_FRACTION", "0.5")
 # user's own words, so the bound on them has to be applied at the door.
 MAX_TASK_CHARS = int(os.environ.get("MAX_TASK_CHARS", "4000"))
 
-MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", "50"))
-SESSION_TTL = float(os.environ.get("SESSION_TTL", "3600"))
+MAX_SESSIONS = 50
+SESSION_TTL = 3600.0
 
 
 def history_budget_chars() -> int:

@@ -123,11 +123,11 @@ mcp = InstrumentedMCP(
 # propagate, which is what finally makes tool_calls_total{status="error"}
 # reachable. Swapping in a keyed search API later means changing this class only.
 MAX_RESULTS = int(os.environ.get("SEARCH_MAX_RESULTS", "5"))
-MIN_SECONDS_BETWEEN_SEARCHES = float(os.environ.get("SEARCH_MIN_INTERVAL", "1.0"))
+MIN_SECONDS_BETWEEN_SEARCHES = 1.0
 
 # One extra attempt by default. See SearchService._fetch for why it is not more.
 SEARCH_MAX_ATTEMPTS = int(os.environ.get("SEARCH_MAX_ATTEMPTS", "2"))
-SEARCH_RETRY_BACKOFF = float(os.environ.get("SEARCH_RETRY_BACKOFF", "2.0"))
+SEARCH_RETRY_BACKOFF = 2.0
 
 # A tool says so when it has nothing to offer, rather than leaving the caller to
 # recognise the prose. The orchestrator refuses to end a run on an answer built
