@@ -1793,6 +1793,47 @@ top of this section, where one observation said the case passed. The honest
 statement is that the contamination path is closed and the model's remaining
 willingness to attribute a real document to a name it was asked about is not.
 
+### Counted while it happens, and said to the caller doing it
+
+The claim column made the habit countable **afterwards**, by querying the corpus.
+It took until 2026-09-15 to notice it was still happening, and only because an
+experiment was recording tool arguments that day: in three runs of forty the
+model indexed the Bill & Melinda Gates Foundation's 2019 annual report under
+`source="Quazzlemint Foundation 2019 report"` - the fictional subject it had just
+failed to find. Nothing on any dashboard moved. A behaviour that is contained
+rather than prevented stays contained only while somebody is watching, and here
+nobody was.
+
+Two halves, from the fact the agent can already compute - which capitalised words
+of the label appear nowhere in the text:
+
+- `retrieval_index_labels_total{subject}` counts every document offered to
+  `index_documents` as `absent`, `present` or `unnamed`, with an alert when most
+  are `absent` and a panel for the three lines. `unnamed` is the healthy bulk:
+  `web`, `eval-fixture` or a URL name no subject and so cannot contradict a
+  document, and they sit in the alert's denominator rather than being filtered
+  out, so routine indexing pushes the ratio down.
+- The tool's reply says so: *"Quazzlemint is not mentioned anywhere in the text
+  you just indexed. Your label is kept as a claim about these documents, not as
+  their origin."*
+
+Naming the missing word is the delicate part, and the reason is two subsections
+up: this tool used to echo the label back, and the model read its own claim back
+as though a tool had confirmed it. The word inside a sentence that says it is
+*not* there cannot be read that way - the same negative frame the search coverage
+note uses - and without the word the note is advice about nothing.
+
+Counted per document offered rather than per document stored, because the store
+skips text it already holds and the caller's claim was made either way. The note
+is judged over the documents of one call together, because the label was applied
+to the call: a term appearing in one document of five is in the material filed.
+
+**Whether it changes what the model does is not established.** The eval run after
+the change looked exactly like the run before it, and the model called
+`index_documents` in neither, so the note reached the metric and the MCP path and
+not the behaviour it was written for. What is established is that the misfiling
+is now visible while it happens instead of months later in a table.
+
 ## Decision: a failed search is not an absence
 
 The research agent's job is to bring back evidence. The failure that matters is
