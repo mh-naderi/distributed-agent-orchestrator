@@ -641,3 +641,71 @@ def test_every_document_in_a_call_is_counted_separately(monkeypatch):
     )
 
     assert seen == ["absent", "present"]
+
+
+# ---------------------------------------------------------------------------
+# ...and saying so to the caller that did it
+# ---------------------------------------------------------------------------
+
+
+def test_a_label_naming_something_absent_is_reported_back():
+    note = retrieval_server.mismatch_note("Quazzlemint Foundation 2019 report", [GATES])
+
+    # The missing word has to appear, or the note is advice about nothing.
+    assert "Quazzlemint" in note
+    assert "not mentioned" in note
+    # Phrased as an absence, never as a confirmation that the label was applied.
+    # This tool echoed the label back once, and the model read its own claim
+    # back as though a tool had established it.
+    assert "filed under Quazzlemint" not in note
+    assert "claim" in note and "unverified" in note
+
+
+def test_an_honest_label_gets_no_note():
+    assert retrieval_server.mismatch_note("Gates Foundation 2019 report", [GATES]) == ""
+
+
+@pytest.mark.parametrize("source", ["web", "integration-test", "https://example.org/a.pdf"])
+def test_a_label_that_names_no_subject_gets_no_note(source):
+    """Nothing to be wrong about, so a note here would be pure noise."""
+    assert retrieval_server.mismatch_note(source, [GATES]) == ""
+
+
+def test_the_note_is_judged_over_the_whole_call():
+    """
+    The label was applied to the call, not to one document. A term that appears
+    in any of the documents filed under it is in the material the caller
+    indexed, and saying otherwise would be false.
+    """
+    documents = [GATES, "The Quazzlemint Foundation was founded in 1994."]
+
+    assert retrieval_server.mismatch_note("Quazzlemint Foundation", documents) == ""
+
+
+def test_every_missing_term_is_named():
+    note = retrieval_server.mismatch_note("Quazzlemint Zorbulon report", [GATES])
+
+    assert "Quazzlemint" in note and "Zorbulon" in note
+    assert "are not mentioned" in note, "plural form"
+
+
+def test_the_receipt_carries_the_note(monkeypatch):
+    """What the model actually reads is the tool's return value."""
+    monkeypatch.setattr(retrieval_server.store, "index", lambda documents, source: len(documents))
+    monkeypatch.setattr(retrieval_server.store, "count", lambda: 458)
+
+    receipt = retrieval_server.index_documents(
+        texts=[GATES], source="Quazzlemint Foundation 2019 report"
+    )
+
+    assert receipt.startswith("Indexed 1 document(s)")
+    assert "Quazzlemint is not mentioned" in receipt
+
+
+def test_an_ordinary_receipt_is_unchanged(monkeypatch):
+    monkeypatch.setattr(retrieval_server.store, "index", lambda documents, source: len(documents))
+    monkeypatch.setattr(retrieval_server.store, "count", lambda: 458)
+
+    receipt = retrieval_server.index_documents(texts=[GATES], source="web")
+
+    assert "Note:" not in receipt

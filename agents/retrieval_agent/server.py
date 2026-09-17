@@ -173,6 +173,40 @@ def label_subject(source: str, text: str) -> str:
     return "absent" if unmentioned_terms(source, text) else "present"
 
 
+def mismatch_note(source: str, documents: list[str]) -> str:
+    """
+    Say so when the label names something none of the text mentions.
+
+    The counter next to this records how often it happens; this is the half the
+    model can act on. It is the same move the research agent makes with search
+    results - state the fact, do not refuse and do not silently rewrite - and it
+    exists for the same behaviour seen from the other end: asked about a
+    foundation that does not exist, the model indexed a real foundation's annual
+    report under the fictional name, in three runs of forty.
+
+    NAMING THE MISSING TERM IS THE DELICATE PART. This tool deliberately does not
+    echo the caller's label back, because it once did and the model read its own
+    claim back as though a tool had confirmed it. A term inside "X is not in the
+    text you indexed" cannot be read that way: it is the same negative frame the
+    search coverage note uses, and it is the only phrasing that tells the model
+    WHICH word was wrong. Without the word the note is advice about nothing.
+
+    Judged over the documents of one call together, because the label was applied
+    to the call. A term that appears in one document of five is in the material
+    the caller filed, and saying otherwise would be false.
+    """
+    if label_subject(source, "\n".join(documents)) != "absent":
+        return ""
+    missing = unmentioned_terms(source, "\n".join(documents))
+    verb = "is" if len(missing) == 1 else "are"
+    return (
+        f"\n\nNote: {', '.join(missing)} {verb} not mentioned anywhere in the text "
+        "you just indexed. Your label is kept as a claim about these documents, "
+        "not as their origin, and retrieval will show it as unverified. Do not "
+        "later describe them as being about it."
+    )
+
+
 @mcp.tool()
 def index_documents(texts: list[str], source: str = "unknown") -> str:
     """Store documents in the vector index so they can be retrieved later by
@@ -187,6 +221,7 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
         INDEX_LABELS.labels(subject=label_subject(source, document)).inc()
     count = store.index(documents, source)
     DOCUMENTS_INDEXED.set(store.count())
+    note = mismatch_note(source, documents)
     # Do not echo the caller's label back as though it were applied. A document
     # that names its own origin keeps that instead, and saying otherwise would
     # tell the model its label stuck when it did not.
@@ -198,7 +233,7 @@ def index_documents(texts: list[str], source: str = "unknown") -> str:
     return (
         f"Indexed {count} document(s); each is filed under the origin named in its "
         f"own Source: line where it has one, and under the label you supplied "
-        f"otherwise. Corpus now holds {store.count()}."
+        f"otherwise. Corpus now holds {store.count()}." + note
     )
 
 
