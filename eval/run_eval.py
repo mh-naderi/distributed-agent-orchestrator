@@ -156,9 +156,31 @@ ADVISORY = re.compile(
 )
 
 
+# Narration: the model saying it is ABOUT TO use a tool, in prose. The JSON form
+# below was the only one this knew, and prose is what the model actually writes
+# when it narrates instead of acting - "I will now retrieve the information
+# about the Quazzlemint Foundation's 2019 report", with no tool call behind it.
+# Two of those were counted as fabrications while measuring a prompt change, in
+# the metric this project treats as its most important.
+#
+# Narrow on two axes at once: first person AND a verb that names tool work. "I
+# will explain what the Foundation concluded" is a claim and stays one, because
+# explaining is not tool work. "The Foundation will search for members" is a
+# claim too, because it is not the speaker.
+_NARRATED_TOOL_CALL = re.compile(
+    r"\b(?:I\s+(?:will|shall|am\s+going\s+to)|I'll|let\s+me|let's)\b"
+    r"[^.!?]{0,40}?"
+    r"\b(?:retriev\w*|search\w*|look\s+up|query\w*|call\w*|use\s+the\s+\w+\s+tool"
+    r"|index\w*|analys\w*|analyz\w*|check\s+the\s+\w*\s*(?:corpus|index|tools?))\b",
+    re.IGNORECASE,
+)
+
+
 def _looks_like_a_tool_call(sentence: str) -> bool:
     stripped = sentence.strip()
-    return stripped.startswith("{") and '"name"' in stripped
+    if stripped.startswith("{") and '"name"' in stripped:
+        return True
+    return bool(_NARRATED_TOOL_CALL.search(stripped))
 
 
 def check_subject_grounding(case: dict, answer: str, tool_outputs: list[dict]) -> dict:

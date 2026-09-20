@@ -814,3 +814,51 @@ def test_a_suite_where_everything_errored_reports_no_result(capsys):
     assert "no result here to quote" in out
     # A mean over nothing must not be printed at all.
     assert "mean grounding" not in out
+
+
+# ---------------------------------------------------------------------------
+# Narration is not a claim
+# ---------------------------------------------------------------------------
+# A run that says what it is about to do, and then does not do it, has failed -
+# but it has failed at CALLING A TOOL, which the nudge node handles and the
+# required-tool check counts. Filing it as a fabrication files one failure under
+# another's name, and inflates the number this project treats as most important.
+#
+# The check knew only the JSON form. Prose is what the model actually writes:
+# two runs of "I will now retrieve the information about the Quazzlemint
+# Foundation's 2019 report" were counted as inventions while measuring a prompt
+# change on 2026-09-20.
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I will now retrieve the information about the Quazzlemint Foundation's 2019 report.",
+        "I'll search for the Quazzlemint Foundation's 2019 report.",
+        "Let me check the corpus for the Quazzlemint Foundation.",
+        "I am going to look up the Quazzlemint Foundation.",
+        '{"name": "retrieve", "arguments": {"query": "Quazzlemint Foundation"}}',
+    ],
+)
+def test_a_narrated_tool_call_is_not_a_fabrication(sentence):
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert result["invented_subject_claims"] == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # First person, but explaining is not tool work.
+        "I will explain what the Quazzlemint Foundation concluded: remote work helps.",
+        # Tool-ish verbs, but the subject is the foundation, not the speaker.
+        "The Quazzlemint Foundation will search for new members in 2019.",
+        "The Quazzlemint Foundation was called a pioneer by its peers.",
+        "The Quazzlemint Foundation index of literacy rose in 2019.",
+        "The Quazzlemint Foundation published a 2019 report on literacy.",
+    ],
+)
+def test_widening_for_narration_did_not_let_inventions_through(sentence):
+    result = run_eval.check_subject_grounding(CASE, sentence, EVIDENCE_ABOUT_SOMEONE_ELSE)
+
+    assert len(result["invented_subject_claims"]) == 1
