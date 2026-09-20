@@ -75,6 +75,19 @@ REGROUND_PROMPT = (
 # messages the system injected, and they do not begin a turn.
 SYNTHETIC_PROMPTS = frozenset()  # populated below, once both prompts exist
 
+# The prompt asked for one more thing until 2026-09-20: "After search_web, call
+# index_documents with the results, so the next question is cheaper. This does
+# not help your current answer - do it anyway."
+#
+# It was asking the model to redo work the system already does. search_web
+# indexes its own results (agents/research_agent/indexer.py), so the corpus grew
+# either way - and the model's version of the job was worse in three measured
+# ways: it labelled documents with the QUESTION (41 rows claim a foundation that
+# does not exist), it sometimes indexed text that was not a document at all
+# ("The search web returned no relevant documents."), and it spent an iteration
+# on housekeeping that two answers then narrated to the user.
+#
+# 4 of 6 honest-ignorance runs called index_documents with the rule in place.
 SYSTEM_PROMPT = """You are an orchestrator. You answer by calling tools, not from memory.
 
 RULES:
@@ -83,10 +96,8 @@ RULES:
 2. If the request needs external facts, call retrieve first. It searches a
    stored index that persists between runs and may already have the answer.
 3. Only if retrieve returns nothing useful, call search_web.
-4. After search_web, call index_documents with the results, so the next
-   question is cheaper. This does not help your current answer - do it anyway.
-5. Call one tool at a time and read its result before deciding the next step.
-6. Stop calling tools once you can answer, then answer.
+4. Call one tool at a time and read its result before deciding the next step.
+5. Stop calling tools once you can answer, then answer.
 
 Use only what the tools returned. If they returned nothing useful, say so.
 Never fill a gap with your own knowledge."""
