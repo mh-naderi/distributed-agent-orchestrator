@@ -1961,10 +1961,11 @@ corpus held model-issued index calls from nine separate days, the earliest
 the integration test's own fixtures are excluded - often with the question's
 subject as the label and sometimes with a paraphrase as the text. (A first count
 said "every day since 2026-09-02"; it had included the test fixtures, which
-filled in the days the model did not index.) The system prompt still carries
-the instruction. The retrieval floor has so far kept those documents away from
-real questions, which is why nothing visibly broke, but the reasoning below was
-written about a model that declined. The
+filled in the days the model did not index.) The retrieval floor has so far kept
+those documents away from real questions, which is why nothing visibly broke,
+but the reasoning below was written about a model that declined - and the
+instruction has since been removed from the prompt; see the subsection at the
+end of this section. The
 result was a durable index that nothing ever wrote to, which made the retrieval
 agent's persistence story hollow.
 
@@ -2046,6 +2047,43 @@ model. The decision is narrower - an escalation path that cannot be exercised is
 worse than no escalation path, because it reads as capability while being
 scaffolding. The seam means adding one back is a single file when there is a way
 to prove it works.
+
+### The instruction was removed once the producer did the job
+
+`search_web` indexing its own results made the prompt's rule 4 - "After
+search_web, call index_documents with the results... do it anyway" - a request
+for duplicate work. Removed on 2026-09-20, because the model's version of the
+job was measurably worse than the agent's:
+
+- **It labelled documents with the question.** 41 rows claim a foundation that
+  does not exist. The agent labels its own output `web-search`, which names no
+  subject and therefore cannot be wrong about one.
+- **It indexed things that were not documents.** One call stored the sentence
+  "The search web returned no relevant documents."
+- **It spent an iteration on housekeeping**, and two answers then narrated that
+  housekeeping to the user.
+
+Measured on `honest-ignorance`, which is where the behaviour actually showed up:
+`index_documents` was called in **4 of 6** runs with the rule and **0 of 18**
+without it. On `mcp-adoption-summary` the rule was already being ignored - 0 of
+6 runs indexed with it in place - which is a reminder that a prompt rule is a
+request, not a mechanism, and that the agent-side side effect is the part that
+actually runs.
+
+**Two things are not established, and the suite cannot currently settle them.**
+Runs that called no tool at all went from 1 of 6 to 6 of 18. That looks like a
+regression and may be one, but it is the same case whose no-tool rate has ranged
+from 12% to 75% across contexts with the prompt untouched - the ordering effect
+documented above - so this sample cannot separate the two. The full suite scored
+6 of 9 on the first run after the change and 9 of 9 on the second; the README
+already warns that one run of this suite is not a measurement.
+
+The change also exposed a hole in the fabrication detector, which is the pattern
+this project keeps repeating: measuring something new finds the instrument
+wrong first. Two runs ending in "I will now retrieve the information about the
+Quazzlemint Foundation's 2019 report", with no tool call behind them, were
+counted as inventions. The narrated-tool-call exemption knew only the JSON form
+of narration; prose is what the model writes. Fixed, in both directions.
 
 ## Build plan
 
