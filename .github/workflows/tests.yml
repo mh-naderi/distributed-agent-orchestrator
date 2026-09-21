@@ -74,7 +74,7 @@ jobs:
         # the code-analysis agent is built on it. The project's own analysis
         # engine checking the project costs nothing extra to install and imposes
         # no style opinions nobody chose.
-        run: python -m pyflakes orchestrator agents eval tests
+        run: python -m pyflakes orchestrator agents eval tests scripts
 
       - name: Run tests
         run: python -m pytest -q -rs
