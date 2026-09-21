@@ -606,6 +606,29 @@ rules` reports SUCCESS on an empty test file.** If a copy silently produced
 nothing, the result is a green tick that means "there was nothing to check".
 Check the byte count before believing a pass.
 
+## Before starting anything
+
+```bash
+.venv/Scripts/python.exe scripts/preflight.py
+```
+
+It checks the two things that have stopped this system before any code ran,
+and exits 1 when starting would be a mistake:
+
+- **Commit charge.** Warns at 85% of the commit limit, refuses at 90%. The
+  whole stack runs at 79-81% on this machine, and starting it adds about 2
+  points; the machine has been measured at 96% with nothing of this project
+  running. See "Memory is the other constraint" below.
+- **Reserved ports.** Refuses if 18443 or 18080 is reserved, because both are
+  baked into the node container at creation and the cluster cannot start
+  without them. Warns if a port-forward's or Ollama's port is reserved, because
+  those can move.
+
+Every line it prints carries its figures - "commit 24.9 of 31.4 GB (79%)", not
+"memory is fine" - so a refusal says what to free. The thresholds are chosen,
+not calibrated: there is one unexplained stop on record and it was never shown
+to be memory. Override them with `--warn-percent` and `--refuse-percent`.
+
 ## Stopping and starting again
 
 Stop the cluster; do not delete it. `docker stop` keeps the PersistentVolume and
@@ -756,6 +779,53 @@ twice ended in a `VIDEO_TDR_FAILURE` bugcheck in `nvlddmkm.sys`, once carrying
 
 If the laptop gets hot and slow, stop the cluster first - it is the cheapest
 thing to give up.
+
+### Memory is the other constraint
+
+The machine has 15.7 GB of RAM and a commit limit around 31-34 GB. With the
+cluster, Ollama and the port-forwards up, it sits at 79-81% of that. The rest of
+the machine decides whether that fits: on the morning of 2026-09-20 it was at
+96% with **nothing of this project running** - the WSL VM held 2.9 GB, a
+VMware VM 1.3 GB, Chrome 2.5 GB - and at 89% on the 21st. Closing applications
+brought it to 80% both times. The machine had not been restarted since the 15th.
+
+**What happened on 2026-09-17, and what is not known.** The kind node stopped at
+16:21 local with exit code 137, `OOMKilled: false`, and 2.3 GB of physical
+memory free. Nothing in this project ran `docker stop`. Those facts are
+compatible with host memory pressure and do not establish it:
+
+- **137 is not evidence of a kill.** Every ordinary `docker stop` of this node
+  also exits 137, because the node does not handle SIGTERM in time - see
+  "Stopping and starting again".
+- **Docker Desktop's log does not say why.** `electron-2026-09-17.log` shows
+  its container-stats streams closing at the same instant, 20:21:33Z, after
+  running since the container started. That is the UI reacting to the stop.
+- **The node was not what failed at 14:04 that day.** Ollama and every
+  port-forward vanished at 14:04, and an early reading of the 16:21 stop took it
+  as the explanation for both. The container's own record rules that out:
+  started 17:10Z, finished 20:21Z, zero restarts - it ran straight through
+  14:04. That earlier disappearance is unexplained.
+
+The corpus survived: `PRAGMA quick_check` returned ok and 462 documents were
+intact after the stop. It is still the reason to take this seriously - an
+abrupt stop of the node is an abrupt stop of the process holding the one sqlite
+file here that cannot be rebuilt.
+
+**A ceiling on the WSL VM is an option, with a trade-off.** Docker Desktop's VM
+takes memory as it needs it; `%UserProfile%\.wslconfig` can cap it:
+
+```ini
+[wsl2]
+memory=6GB
+```
+
+This protects the rest of the machine, and moves the risk rather than removing
+it: under a ceiling, memory pressure inside the VM is handled by the VM's own
+OOM killer, which would stop a container from the inside. The VM has been seen
+at 1.5-2.9 GB here, never measured at its peak during inference, so 6 GB is a
+margin rather than a measurement. It is machine configuration outside this
+repo, applies to everything using WSL, and needs `wsl --shutdown` to take
+effect - which is why it is documented here and not applied by any script.
 
 ### host.docker.internal works here, but not everywhere
 
