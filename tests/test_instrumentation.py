@@ -171,8 +171,12 @@ def test_every_agent_carries_an_identical_copy():
     is what this asserts.
     """
     copies = sorted(AGENTS.glob("*/instrumentation.py"))
+    agents = sorted(p for p in AGENTS.iterdir() if p.is_dir() and (p / "server.py").exists())
 
-    assert len(copies) == 3, f"expected one per agent, found {[str(c) for c in copies]}"
+    assert len(copies) == len(agents), (
+        f"expected one per agent: {len(agents)} agent(s), "
+        f"{[c.parent.name for c in copies]} carry a copy"
+    )
 
     contents = {c: c.read_bytes() for c in copies}
     first = copies[0]
@@ -184,8 +188,9 @@ def test_every_agent_carries_an_identical_copy():
 
 def test_each_agent_uses_the_instrumented_server():
     """A copied file that no server actually constructs would pass every test above."""
-    for name in ("research_agent", "retrieval_agent", "code_analysis_agent"):
-        source = (AGENTS / name / "server.py").read_text(encoding="utf-8")
+    for agent in sorted(p for p in AGENTS.iterdir() if p.is_dir()):
+        name = agent.name
+        source = (agent / "server.py").read_text(encoding="utf-8")
         assert "InstrumentedMCP(" in source, f"{name} still builds a plain FastMCP"
         assert "TOOL_CALLS.labels" not in source, (
             f"{name} still counts inside a tool body, which cannot see rejected calls"
