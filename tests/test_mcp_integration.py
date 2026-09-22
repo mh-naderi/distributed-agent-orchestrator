@@ -10,6 +10,7 @@ Start the agents first:
     MCP_PORT=18000 python agents/research_agent/server.py
     MCP_PORT=18001 python agents/retrieval_agent/server.py
     MCP_PORT=18002 python agents/code_analysis_agent/server.py
+    MCP_PORT=18003 python agents/reader_agent/server.py
 
 The retrieval agent also needs Ollama running with the embedding model pulled.
 """
@@ -38,6 +39,7 @@ async def test_discovers_every_agents_tools(registry):
         "retrieve",
         "analyze_code",
         "evaluate_expression",
+        "fetch_page",
     }
 
 
@@ -171,3 +173,28 @@ async def test_unreachable_agent_is_skipped_not_fatal():
     reg = MCPToolRegistry({"ghost": "http://localhost:1/mcp"})
     tools = await reg.discover()
     assert tools == []
+
+
+async def test_the_reader_refuses_an_address_inside_the_cluster(registry):
+    """
+    The rule that matters, exercised where it matters: from a pod, 10.96.0.1 is
+    the Kubernetes API service and 169.254.169.254 is where cloud metadata lives.
+    Unit tests inject DNS; this one uses the resolver the agent really has.
+    """
+    result = await registry.call("fetch_page", {"url": "http://10.96.0.1/api"})
+
+    assert "not a public address" in result
+    assert "refused" in result
+
+
+async def test_the_reader_returns_page_text(registry):
+    """
+    Reaches the real internet, like the search test above, so it can fail for
+    reasons that are not a regression. example.com exists to be fetched.
+    """
+    result = await registry.call("fetch_page", {"url": "https://example.com/"})
+
+    assert "Example Domain" in result
+    # The limits travel with the text, the way analyze_code states what it did
+    # not check.
+    assert "Not checked:" in result

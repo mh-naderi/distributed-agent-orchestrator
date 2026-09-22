@@ -15,6 +15,7 @@ Runs entirely locally — no cloud account, no GPU rental, no API keys.
 | **research** | `search_web` | none | Deployment |
 | **retrieval** | `index_documents`, `retrieve` | vector index | StatefulSet + PVC |
 | **code-analysis** | `analyze_code`, `evaluate_expression` | none | Deployment |
+| **reader** | `fetch_page` | none | Deployment |
 
 The orchestrator runs a reason → act → reason loop: ask the LLM what to do, call
 the MCP tool it picks, feed the result back, repeat until it answers or hits the
@@ -37,6 +38,7 @@ flowchart TB
             RES["research-agent · Deployment<br/>search_web"]
             RET["retrieval-agent · StatefulSet<br/>index_documents · retrieve"]
             CODE["code-analysis-agent · Deployment<br/>analyze_code"]
+            READ["reader-agent · Deployment<br/>fetch_page"]
         end
         PVC[("PersistentVolume<br/>sqlite-vec index")]
         PROM["Prometheus"]
@@ -50,6 +52,7 @@ flowchart TB
     ORCH ==>|"tool calls over MCP"| AGENTS
 
     RES --> WEB
+    READ --> WEB
     RET -->|"embed"| OLLAMA
     RET <--> PVC
 
@@ -63,7 +66,7 @@ flowchart TB
     classDef obs fill:#e9d5ff,stroke:#7e22ce,color:#111
 
     class RET,PVC stateful
-    class RES,CODE stateless
+    class RES,CODE,READ stateless
     class WEB,OLLAMA external
     class ORCH core
     class PROM,GRAF obs
@@ -105,6 +108,10 @@ MCP_PORT=18001 .venv/Scripts/python.exe agents/retrieval_agent/server.py
 MCP_PORT=18002 .venv/Scripts/python.exe agents/code_analysis_agent/server.py
 ```
 
+```bash
+MCP_PORT=18003 .venv/Scripts/python.exe agents/reader_agent/server.py
+```
+
 **4. Orchestrator**
 
 ```bash
@@ -121,7 +128,7 @@ time, so this cannot be added to an existing cluster:
 kind create cluster --name agent-orchestrator --config kind-cluster.yaml
 ```
 
-Build and load each image — three agents plus the orchestrator (the manifests
+Build and load each image — four agents plus the orchestrator (the manifests
 use `imagePullPolicy: IfNotPresent`):
 
 ```bash

@@ -30,6 +30,7 @@ Each agent in its own terminal:
 MCP_PORT=18000 .venv/Scripts/python.exe agents/research_agent/server.py
 MCP_PORT=18001 .venv/Scripts/python.exe agents/retrieval_agent/server.py
 MCP_PORT=18002 .venv/Scripts/python.exe agents/code_analysis_agent/server.py
+MCP_PORT=18003 .venv/Scripts/python.exe agents/reader_agent/server.py
 ```
 
 Then either the CLI:
@@ -80,13 +81,14 @@ the bind fails. The most likely culprit is the host-process UI from the section
 above, which serves on the same port on purpose - one more reason the two ways
 of running are not meant to overlap.
 
-Build and load each image, then apply. Four images now, one per agent plus the
+Build and load each image, then apply. Five images now, one per agent plus the
 orchestrator:
 
 ```bash
 docker build -t agent-orchestrator/research-agent:latest agents/research_agent
 docker build -t agent-orchestrator/retrieval-agent:latest agents/retrieval_agent
 docker build -t agent-orchestrator/code-analysis-agent:latest agents/code_analysis_agent
+docker build -t agent-orchestrator/reader-agent:latest agents/reader_agent
 docker build -t agent-orchestrator/orchestrator:latest orchestrator
 ```
 
@@ -94,6 +96,7 @@ docker build -t agent-orchestrator/orchestrator:latest orchestrator
 kind load docker-image agent-orchestrator/research-agent:latest --name agent-orchestrator
 kind load docker-image agent-orchestrator/retrieval-agent:latest --name agent-orchestrator
 kind load docker-image agent-orchestrator/code-analysis-agent:latest --name agent-orchestrator
+kind load docker-image agent-orchestrator/reader-agent:latest --name agent-orchestrator
 kind load docker-image agent-orchestrator/orchestrator:latest --name agent-orchestrator
 kubectl apply -f k8s/
 ```
@@ -139,6 +142,7 @@ the test suite's integration cases, or the eval harness against pods:
 kubectl port-forward service/research-agent-service      18000:8000
 kubectl port-forward service/retrieval-agent-service     18001:8000
 kubectl port-forward service/code-analysis-agent-service 18002:8000
+kubectl port-forward service/reader-agent-service        18003:8000
 ```
 
 Each tunnel holds a terminal and dies when the pod is replaced, the terminal

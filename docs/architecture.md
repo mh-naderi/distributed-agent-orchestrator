@@ -38,6 +38,7 @@ system actually behaves rather than how it was meant to.
 - [The corpus learned to vouch for a fiction](#the-corpus-learned-to-vouch-for-a-fiction)
 - [Decision: a failed search is not an absence](#decision-a-failed-search-is-not-an-absence)
 - [Decision: the cache remembers evidence and nothing else](#decision-the-cache-remembers-evidence-and-nothing-else)
+- [Decision: a fourth agent, to test a claim and fill a gap](#decision-a-fourth-agent-to-test-a-claim-and-fill-a-gap)
 - [Decision: the escalation path was removed rather than left unverified](#decision-the-escalation-path-was-removed-rather-than-left-unverified)
 - [Saying which results are not about what was asked](#saying-which-results-are-not-about-what-was-asked)
 - [The guardrail for answering from nothing](#the-guardrail-for-answering-from-nothing)
@@ -80,6 +81,7 @@ The last two points used to be aspirational. They aren't anymore - see below.
 | research | `search_web` | none | Deployment |
 | retrieval | `index_documents`, `retrieve` | **persistent index** | **StatefulSet + PVC** |
 | code-analysis | `analyze_code`, `evaluate_expression` | none | Deployment |
+| reader | `fetch_page` | none | Deployment |
 
 ## Stateful vs stateless, and why it matters here
 
@@ -2084,6 +2086,67 @@ wrong first. Two runs ending in "I will now retrieve the information about the
 Quazzlemint Foundation's 2019 report", with no tool call behind them, were
 counted as inventions. The narrated-tool-call exemption knew only the JSON form
 of narration; prose is what the model writes. Fixed, in both directions.
+
+## Decision: a fourth agent, to test a claim and fill a gap
+
+This document has said since the tool-ownership map was built that adding an
+agent needs no routing change. That was never exercised. `reader-agent`, added
+2026-09-22, exercises it: the orchestrator's only edit was one line in
+`AGENT_URLS`, Prometheus needed none at all - scraping is opt-in by annotation -
+and discovery went from five tools to six in the running cluster.
+
+### The gap it fills
+
+The system could find pages and never read one. `search_web` returns a title, a
+snippet and a URL; `retrieve` returns stored fragments. The fabrication path
+documented above is answers assembled from "real documents about a different
+subject", and thin snippets are what made that easy - the model had nothing
+substantive to read, so the difference between "these results are about
+something else" and "these results answer the question" had to be guessed.
+
+`fetch_page(url)` returns one page as text, capped at 8000 characters, with the
+same statement of limits that `analyze_code` makes: markup was stripped so
+boilerplate may be mixed in, JavaScript was not executed, and nothing verifies
+what the page claims.
+
+### What it refuses, and why that is the substance
+
+This agent fetches URLs an LLM chose, from inside the cluster. A pod can reach
+the Kubernetes API server, every ClusterIP service, the node on 127.0.0.1, and
+on a cloud node the metadata endpoint that hands out credentials. The model
+choosing those URLs is the one this project has watched invent a foundation, a
+report title and a source label.
+
+So the hostname is resolved and every address checked before the request; a name
+that resolves to both a public and a private address is refused, because which
+one a connection uses is not knowable here. Redirects are followed by hand and
+re-checked at each hop - urllib's default opener would follow a public URL to
+169.254.169.254 without anything objecting. Non-http schemes, content types that
+are not text, oversized bodies and slow servers are all refused or capped.
+
+Verified from the running pod, not only in tests: `169.254.169.254`, `10.96.0.1`
+(the Kubernetes API service) and `file:///etc/passwd` were each refused with a
+reason, while `example.com` came back as text.
+
+### A refusal is a result
+
+It returns as text rather than raising. A refused fetch is the tool working, and
+the model can act on the reason; raising would file it under
+`tool_calls_total{status="error"}`, which should keep meaning "this tool broke".
+`reader_fetch_outcomes_total{outcome}` counts fetched against refused, and the
+dashboard charts both. Nothing alerts on it: unlike misfiled documents, which
+accumulate silently in a corpus nobody re-reads, a refusal is returned to the
+model in the same run.
+
+### What is not measured yet
+
+Whether the model uses it, and what its presence does to routing. This project
+has already measured that adding an unrelated tool changed which tool the model
+picked on an unrelated case - `evaluate_expression` moved `cached-retrieval`
+from `retrieve` 4 of 4 to `search_web` 6 of 6. A sixth tool is a bigger change
+to the tool list than that was, so the same measurement is owed here and has not
+been taken: the machine was at 91% of its commit limit when the agent landed,
+and `scripts/preflight.py` refused to start local inference.
 
 ## Build plan
 
