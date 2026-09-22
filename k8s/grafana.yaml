@@ -488,6 +488,34 @@ data:
               "legendFormat": "label names no subject"
             }
           ]
+        },
+        {
+          "type": "timeseries",
+          "id": 22,
+          "title": "Pages fetched and refused",
+          "description": "fetch_page calls by outcome. The reader agent reads one URL the model chose, which makes it a proxy with an LLM picking the targets - from inside the cluster, where a pod can reach the Kubernetes API, any ClusterIP service, the node on localhost, and on a cloud node the metadata endpoint that hands out credentials.\n\nSo 'refused' is the safety rules working, not a fault: a non-public address, a scheme that is not http(s), a redirect that pointed inward, a content type this tool cannot turn into prose. A steady refused line means the model keeps asking for addresses it should not have, which is worth seeing and is invisible in an error rate - a refusal is a successful call.\n\nNothing alerts on this. Unlike misfiled documents, which accumulate silently in a corpus nobody re-reads, a refusal is returned to the model in the same run and shows up in the answer. Errors - the page could not be reached at all - surface as tool_calls_total{status=\"error\"} on the error panel above.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 68
+          },
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "decimals": 0
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(reader_fetch_outcomes_total{outcome=\"fetched\"}[5m]))",
+              "legendFormat": "fetched"
+            },
+            {
+              "expr": "sum(rate(reader_fetch_outcomes_total{outcome=\"refused\"}[5m]))",
+              "legendFormat": "refused by the safety rules"
+            }
+          ]
         }
       ]
     }

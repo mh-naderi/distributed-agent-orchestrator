@@ -1,0 +1,69 @@
+# The fourth agent, and the test of a claim this project has made since the
+# tool-ownership map was built: adding one needs no change to the orchestrator's
+# routing. Discovery asks each configured URL what it offers and dispatch is a
+# lookup, so the only orchestrator edit is one line in AGENT_URLS - and
+# Prometheus needs none at all, because scraping is opt-in by annotation.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reader-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: reader-agent }
+  template:
+    metadata:
+      labels: { app: reader-agent }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9104"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: reader-agent
+          image: agent-orchestrator/reader-agent:latest
+          imagePullPolicy: IfNotPresent  # so kind uses the locally-built image
+          ports:
+            # Named, because Prometheus selects the scrape target by port name.
+            - name: mcp
+              containerPort: 8000
+            - name: metrics
+              containerPort: 9104
+          resources:
+            # A page is capped at 400KB on the wire and 8000 characters of text,
+            # so this agent's working set is one page plus the stripped copy of
+            # it. Same allowance as the other thin agents.
+            requests: { memory: "64Mi", cpu: "50m" }
+            limits: { memory: "256Mi" }
+          livenessProbe:
+            # A wedged agent holds its socket and answers nothing, which is the
+            # failure this probe exists for. Ten seconds is the fetch timeout,
+            # so the probe period has to sit well above it or a slow page would
+            # look like a hang.
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: mcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reader-agent-service
+  labels:
+    app: reader-agent
+spec:
+  selector: { app: reader-agent }
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9104
+      targetPort: 9104

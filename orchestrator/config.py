@@ -33,6 +33,7 @@ AGENT_URLS = {
     "research": os.environ.get("RESEARCH_AGENT_URL", "http://localhost:18000/mcp"),
     "retrieval": os.environ.get("RETRIEVAL_AGENT_URL", "http://localhost:18001/mcp"),
     "code_analysis": os.environ.get("CODE_ANALYSIS_AGENT_URL", "http://localhost:18002/mcp"),
+    "reader": os.environ.get("READER_AGENT_URL", "http://localhost:18003/mcp"),
 }
 
 # ---------------------------------------------------------------------------
