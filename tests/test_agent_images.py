@@ -237,3 +237,40 @@ def test_extras_and_pins_do_not_hide_a_declared_package(tmp_path):
 
     assert declared_requirements(agent) == {"mcp", "sqlite-vec"}
     assert third_party_imports(agent) - declared_requirements(agent) == set()
+
+
+# ---------------------------------------------------------------------------
+# ...and CI has to build every one of them
+# ---------------------------------------------------------------------------
+
+
+def workflow_contexts() -> set[str]:
+    """The build contexts named in the images matrix of the CI workflow."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "tests.yml"
+    ).read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*context:\s*(\S+)\s*$", workflow, re.MULTILINE))
+
+
+def test_ci_builds_every_agent_image():
+    """
+    The matrix is a hand-maintained list, and reader-agent was added to the repo
+    without being added to it: CI ran four image jobs, reported success, and
+    never built the new agent's Dockerfile. Every check in this file reads the
+    Dockerfile rather than building it, so nothing else would have noticed.
+    """
+    contexts = workflow_contexts()
+    missing = [a.name for a in AGENTS if f"agents/{a.name}" not in contexts]
+
+    assert not missing, (
+        f"{missing} have a Dockerfile but no entry in the images matrix of "
+        ".github/workflows/tests.yml, so CI never builds them"
+    )
+
+
+def test_the_matrix_check_reads_a_real_matrix():
+    """A regex that matched nothing would make the test above vacuous."""
+    contexts = workflow_contexts()
+
+    assert "orchestrator" in contexts, "the orchestrator's own image job is missing"
+    assert len(contexts) >= len(AGENTS) + 1

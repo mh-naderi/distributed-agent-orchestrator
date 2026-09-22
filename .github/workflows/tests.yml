@@ -157,6 +157,9 @@ jobs:
           - name: code-analysis-agent
             context: agents/code_analysis_agent
             imports: server
+          - name: reader-agent
+            context: agents/reader_agent
+            imports: server
           # The odd one out: the agents are self-contained server.py files
           # copied to /app, while this is a package copied to /app/orchestrator,
           # so it is imported by its package path rather than as `server`.
