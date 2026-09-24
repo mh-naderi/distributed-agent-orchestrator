@@ -487,6 +487,12 @@ The eval suite is what makes this visible at all. Without a case pinning
 `cached-retrieval`'s expected tool, adding the evaluator would have silently
 changed retrieval routing across the system and nothing would have said so.
 
+**Reproduced with a sixth tool on 2026-09-24**, which is what turns this from an
+anecdote into a property of the system: adding `fetch_page` flipped
+`mcp-adoption-summary`'s first tool 12 times out of 12 and cut `honest-ignorance`'s
+tool use from 7 of 12 runs to 1, without the model ever calling it. See "Decision:
+a fourth agent, to test a claim and fill a gap".
+
 ### The fix: guidance belongs next to the tool
 
 The regression was closed by changing one thing - `retrieve`'s own description.
@@ -2138,15 +2144,39 @@ dashboard charts both. Nothing alerts on it: unlike misfiled documents, which
 accumulate silently in a corpus nobody re-reads, a refusal is returned to the
 model in the same run.
 
-### What is not measured yet
+### Measured: it changes routing without ever being called
 
-Whether the model uses it, and what its presence does to routing. This project
-has already measured that adding an unrelated tool changed which tool the model
-picked on an unrelated case - `evaluate_expression` moved `cached-retrieval`
-from `retrieve` 4 of 4 to `search_web` 6 of 6. A sixth tool is a bigger change
-to the tool list than that was, so the same measurement is owed here and has not
-been taken: the machine was at 91% of its commit limit when the agent landed,
-and `scripts/preflight.py` refused to start local inference.
+Taken 2026-09-24, the same design as the `evaluate_expression` measurement but
+with the arms interleaved inside one session, so drift within the session lands
+on both. Identical task, identical corpus; the only difference is whether
+`fetch_page` appears in the list handed to the model. Twelve runs per arm.
+
+| case | with `fetch_page` visible | without it |
+|---|---|---|
+| `cached-retrieval` | `retrieve` 6/6 | `retrieve` 6/6 |
+| `mcp-adoption-summary` | `retrieve` first **12/12** | `search_web` first **12/12** |
+| `honest-ignorance` | called a tool **1 of 12** | called a tool **7 of 12** |
+
+**The model never called `fetch_page` once** in 24 runs. Its presence in the
+list is the entire mechanism, which is what makes this the same finding as the
+evaluator's and not a new one about this tool in particular.
+
+The two effects point in opposite directions, and honesty requires naming both:
+
+- On `mcp-adoption-summary` the flip is toward the behaviour the system prompt
+  asks for - rule 2 says retrieve first, and the six-tool arm does, 12 times out
+  of 12, where the five-tool arm went straight to the web every time. An
+  unrelated agent made the model follow an instruction better.
+- On `honest-ignorance` it is a loss: 1 of 12 runs called any tool, against 7 of
+  12 without. That case is the project's least stable - its no-tool rate has
+  ranged from 12% to 75% across contexts with nothing changed - but the arms
+  here were interleaved rather than pooled across sessions, which is the control
+  the earlier comparisons lacked, and the gap repeated across two batches.
+
+What this does NOT show is that the reader agent is bad, or good. It shows that
+the sixth tool moved two of three cases, in opposite directions, while doing
+nothing itself. The suite is what made that visible; without a case pinning each
+expected tool, this would have been an invisible change in system behaviour.
 
 ## Build plan
 
