@@ -260,6 +260,31 @@ def _attribution(source: str) -> str:
     return f"unverified label: {source}"
 
 
+# THE LENGTH OF THIS DESCRIPTION IS LOAD-BEARING, which was learned by breaking
+# it. A docstring here is not a comment: FastMCP hands it to the model as the
+# tool's description.
+#
+# The reasoning that looked obvious: the last paragraph below explains a past
+# measurement to whoever maintains this file, the model cannot act on it, and 300
+# characters of it are spending the attention budget of a 1.7B model whose whole
+# window is 4096 tokens - all six descriptions came to 2436 characters. So it was
+# moved out into a comment on 2026-09-25.
+#
+# That made routing WORSE, in a 2x2 run twice in one session (retrieve's
+# description long or short, fetch_page present or absent, 6 runs per arm):
+#
+#   cached-retrieval, called any tool:  short+6 tools 1 of 6   short+5  6 of 6
+#                                       long+6       6 of 6    long+5   6 of 6
+#   mcp-adoption-summary:               long+6 answered from the corpus alone,
+#                                       6 of 6 retrieve and no web round trip;
+#                                       short+6 went retrieve then search_web.
+#
+# Only the trimmed description with six tools broke, and it broke identically in
+# both batches. The rationale paragraph is not information the model uses - it is
+# WEIGHT, and it keeps retrieve competitive in a list where search_web is 90
+# characters and five other tools are shouting. So it stays in the description,
+# and this comment exists to stop the next person trimming it for the same good
+# reason.
 @mcp.tool()
 def retrieve(query: str, k: int = 5) -> str:
     """Search the stored corpus for documents relevant to the query, by meaning

@@ -493,6 +493,52 @@ anecdote into a property of the system: adding `fetch_page` flipped
 tool use from 7 of 12 runs to 1, without the model ever calling it. See "Decision:
 a fourth agent, to test a claim and fill a gap".
 
+### The remedy did not work a second time, and trying it made things worse
+
+`honest-ignorance` lost tool use when `fetch_page` arrived - 1 of 12 runs called
+anything, against 7 of 12 without it. The obvious move was the one that worked
+last time: strengthen `retrieve`'s own description, where the choice is made.
+
+Looking at what the model actually receives found something else first.
+`retrieve`'s description was **777 characters, and 300 of them explained a past
+measurement to whoever maintains the file** - a docstring here is not a comment,
+FastMCP hands it to the model. All six descriptions came to 2436 characters,
+roughly 600 tokens of a 4096-token window. Removing the rationale looked free.
+
+It was not free. Measured as a 2x2 inside one session - `retrieve`'s description
+long or short, `fetch_page` visible or hidden, six runs per arm, run twice:
+
+| arm | `cached-retrieval` called a tool | `mcp-adoption-summary` |
+|---|---|---|
+| short description, 6 tools | **1 of 6**, twice | `retrieve` then `search_web` |
+| short description, 5 tools | 6 of 6 | `search_web` |
+| long description, 6 tools | 6 of 6 | **`retrieve` alone, no web round trip** |
+| long description, 5 tools | 6 of 6 | `search_web` |
+
+Only the trimmed description with six tools broke, identically in both batches.
+The rationale paragraph is not information the model uses: it is **weight**, and
+it keeps `retrieve` competitive in a list where `search_web` is 90 characters and
+five other tools are shouting. The trim was reverted and the comment above the
+tool now says why, so the next reader does not remove it for the same good
+reason.
+
+Three things this is worth being clear about:
+
+- **A description's LENGTH is a routing parameter**, not just its content. That
+  is uncomfortable - it means prose nobody intended as instruction is doing
+  work - and it is what two batches showed.
+- **The first comparison was not a comparison.** The trim was measured against
+  the previous day's numbers, and that same day the *unchanged* arm moved too:
+  `honest-ignorance` without `fetch_page` went from 7 of 12 to 0 of 6. This
+  suite's no-tool rate has swung from 12% to 75% across sessions with nothing
+  changed, so any before/after spanning sessions is uninterpretable. The matrix
+  exists because of that mistake.
+- **The remedy did not transfer.** Strengthening the description fixed the
+  evaluator's regression in 2026-09; it did nothing for `honest-ignorance` here,
+  which stayed at 0 of 6 in three of four arms. What the description controlled
+  was which tool gets chosen, not whether any tool gets chosen at all - and the
+  cost of the sixth tool on this case is the second kind.
+
 ### The fix: guidance belongs next to the tool
 
 The regression was closed by changing one thing - `retrieve`'s own description.
